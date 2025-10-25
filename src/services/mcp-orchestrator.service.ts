@@ -272,6 +272,22 @@ export class MCPOrchestratorService implements MCPOrchestrator {
 
             // Execute workflow steps
 
+            // Step 1: Fetch HTML content
+            const htmlResult = await this.executeWorkflowStep(
+                workflowId,
+                "fetch_html",
+                async () => {
+                    logger.info(`Fetching HTML content for: ${url}`);
+                    const { html, cookieConsentMetadata } = await this.fetchHtmlContent(url);
+
+                    // Store HTML and metadata in workflow context
+                    workflow.context.html = html;
+                    workflow.context.cookieConsentMetadata = cookieConsentMetadata;
+
+                    return { html, cookieConsentMetadata };
+                }
+            );
+
             const siblingDiscoveryResult = await this.executeWorkflowStep(
                 workflowId,
                 "discover_sibling_links",
