@@ -46,6 +46,18 @@ export interface PlanMetadata {
   cookieConsentRequired?: boolean; // NEW
   cookieConsentLibrary?: string; // NEW: e.g., 'Cookiebot', 'OneTrust'
   cookieConsentSaveButton?: string; // NEW: CSS selector for cookie save/accept button
+  cookieConsent?: { // NEW: Comprehensive cookie consent metadata
+    detected: boolean;
+    strategy: string;
+    library: string;
+    selectors: Record<string, string>;
+    acceptButtonSelector?: string;
+    rejectButtonSelector?: string;
+    settingsButtonSelector?: string;
+    bannerSelector?: string;
+    modalSelector?: string;
+    handledSuccessfully: boolean;
+  };
   aiResponse?: {  // NEW: Store AI output for debugging
     model: string;
     prompt: string;

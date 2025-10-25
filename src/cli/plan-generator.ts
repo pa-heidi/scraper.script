@@ -216,6 +216,25 @@ class PlanGeneratorCLI {
     console.log(`\nRate Limit: ${result.plan.rateLimitMs}ms`);
     console.log(`Max Retries: ${result.plan.retryPolicy.maxAttempts}`);
 
+    // Display cookie consent information
+    if (result.plan.metadata.cookieConsent) {
+      const cc = result.plan.metadata.cookieConsent;
+      console.log('\nCookie Consent Configuration:');
+      console.log(`  Detected: ${cc.detected ? '✅' : '❌'}`);
+      console.log(`  Strategy: ${cc.strategy}`);
+      console.log(`  Library: ${cc.library}`);
+      console.log(`  Handled Successfully: ${cc.handledSuccessfully ? '✅' : '❌'}`);
+
+      if (cc.acceptButtonSelector) {
+        console.log(`  Accept Button Selector: ${cc.acceptButtonSelector}`);
+      }
+      if (cc.bannerSelector) {
+        console.log(`  Banner Selector: ${cc.bannerSelector}`);
+      }
+    } else {
+      console.log('\nCookie Consent: ❌ Not detected');
+    }
+
     if (result.siblingDiscovery) {
       console.log('\nSibling Link Discovery:');
       console.log(`  Original URLs: ${result.siblingDiscovery.originalUrls.length}`);
@@ -369,6 +388,35 @@ ${JSON.stringify(result.plan, null, 2)}
 \`\`\`
 
 `;
+
+    // Add cookie consent section if available
+    if (result.plan.metadata.cookieConsent) {
+      const cc = result.plan.metadata.cookieConsent;
+      markdown += `\n## 🍪 Cookie Consent Configuration
+
+| Property | Value |
+|----------|-------|
+| Detected | ${cc.detected ? '✅' : '❌'} |
+| Strategy | ${cc.strategy} |
+| Library | ${cc.library} |
+| Handled Successfully | ${cc.handledSuccessfully ? '✅' : '❌'} |
+
+### Cookie Consent Selectors
+
+| Selector Type | CSS Selector |
+|---------------|--------------|
+`;
+      if (cc.acceptButtonSelector) markdown += `| Accept Button | \`${cc.acceptButtonSelector}\` |\n`;
+      if (cc.rejectButtonSelector) markdown += `| Reject Button | \`${cc.rejectButtonSelector}\` |\n`;
+      if (cc.settingsButtonSelector) markdown += `| Settings Button | \`${cc.settingsButtonSelector}\` |\n`;
+      if (cc.bannerSelector) markdown += `| Banner | \`${cc.bannerSelector}\` |\n`;
+      if (cc.modalSelector) markdown += `| Modal | \`${cc.modalSelector}\` |\n`;
+
+      markdown += `
+> **💡 Usage Note**: These cookie consent selectors are automatically captured during plan generation and can be used by the scraping executor to handle cookie consent in future scraping sessions, ensuring compliance and preventing blocking.
+
+`;
+    }
 
     // Add metadata
     markdown += `\n## ℹ️ Metadata

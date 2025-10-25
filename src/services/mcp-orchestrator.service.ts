@@ -271,22 +271,6 @@ export class MCPOrchestratorService implements MCPOrchestrator {
             this.activeWorkflows.set(workflowId, workflow);
 
             // Execute workflow steps
-            const htmlResult = await this.executeWorkflowStep(
-                workflowId,
-                "fetch_html",
-                async () => {
-                    // Fetch HTML content once for the entire workflow
-                    const { html, cookieConsentMetadata } =
-                        await this.fetchHtmlContent(url);
-                    logger.info(
-                        `Fetched HTML content: ${html.length} characters`,
-                        {
-                            hasCookieConsent: !!cookieConsentMetadata
-                        }
-                    );
-                    return { html, cookieConsentMetadata };
-                }
-            );
 
             const siblingDiscoveryResult = await this.executeWorkflowStep(
                 workflowId,
@@ -2059,7 +2043,26 @@ IMPORTANT:
                 successRate: 0,
                 avgAccuracy: 0,
                 robotsTxtCompliant: true,
-                gdprCompliant: true
+                gdprCompliant: true,
+                // Add cookie consent metadata for future scraping sessions
+                cookieConsent: cookieConsentMetadata
+                    ? {
+                          detected: cookieConsentMetadata.detected || false,
+                          strategy: cookieConsentMetadata.strategy || "none",
+                          library: cookieConsentMetadata.library || "unknown",
+                          selectors: cookieConsentMetadata.selectors || {},
+                          acceptButtonSelector:
+                              cookieConsentMetadata.acceptButtonSelector,
+                          rejectButtonSelector:
+                              cookieConsentMetadata.rejectButtonSelector,
+                          settingsButtonSelector:
+                              cookieConsentMetadata.settingsButtonSelector,
+                          bannerSelector: cookieConsentMetadata.bannerSelector,
+                          modalSelector: cookieConsentMetadata.modalSelector,
+                          handledSuccessfully:
+                              cookieConsentMetadata.handledSuccessfully || false
+                      }
+                    : undefined
             }
         };
 
@@ -2089,6 +2092,29 @@ IMPORTANT:
         siblingResults: any[],
         contentAnalysis: any
     ): string {
+        // Cookie consent section
+        const cookieConsentSection = plan.metadata.cookieConsent
+            ? `
+## Cookie Consent Configuration
+- **Detected**: ${plan.metadata.cookieConsent.detected ? "✅ Yes" : "❌ No"}
+- **Strategy**: ${plan.metadata.cookieConsent.strategy}
+- **Library**: ${plan.metadata.cookieConsent.library}
+- **Handled Successfully**: ${plan.metadata.cookieConsent.handledSuccessfully ? "✅ Yes" : "❌ No"}
+
+### Cookie Consent Selectors
+${plan.metadata.cookieConsent.acceptButtonSelector ? `- **Accept Button**: \`${plan.metadata.cookieConsent.acceptButtonSelector}\`` : ""}
+${plan.metadata.cookieConsent.rejectButtonSelector ? `- **Reject Button**: \`${plan.metadata.cookieConsent.rejectButtonSelector}\`` : ""}
+${plan.metadata.cookieConsent.settingsButtonSelector ? `- **Settings Button**: \`${plan.metadata.cookieConsent.settingsButtonSelector}\`` : ""}
+${plan.metadata.cookieConsent.bannerSelector ? `- **Banner**: \`${plan.metadata.cookieConsent.bannerSelector}\`` : ""}
+${plan.metadata.cookieConsent.modalSelector ? `- **Modal**: \`${plan.metadata.cookieConsent.modalSelector}\`` : ""}
+
+**Usage Note**: These selectors can be used by the scraping executor to automatically handle cookie consent in future scraping sessions, ensuring compliance and avoiding blocking.
+`
+            : `
+## Cookie Consent Configuration
+- **Detected**: ❌ No cookie consent detected
+`;
+
         const doc = `
 # Scraping Plan: ${plan.planId}
 
@@ -2100,7 +2126,7 @@ This scraping plan was generated using workflow analysis combining sibling link 
 - **List Selector**: \`${plan.listSelector}\`
 - **Pagination Selector**: ${plan.paginationSelector ? `\`${plan.paginationSelector}\`` : "None"}
 - **Rate Limit**: ${plan.rateLimitMs}ms between requests
-
+${cookieConsentSection}
 ## Detail Selectors
 ${Object.entries(plan.detailSelectors)
     .map(([field, selector]) => `- **${field}**: \`${selector}\``)
@@ -2145,8 +2171,6 @@ ${new Date().toISOString()}
 
         return compressed;
     }
-
-
 
     private async validatePlan(plan: ScrapingPlan): Promise<any> {
         try {
