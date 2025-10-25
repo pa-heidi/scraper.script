@@ -18,8 +18,6 @@ import {
 import { PlaywrightExecutor } from './playwright-executor.service';
 
 export class ContentPatternAnalyzer {
-  private readonly SIMILARITY_THRESHOLD = 0.5;
-  private readonly MIN_LIST_ITEMS = 2;
   private readonly NAVIGATION_SELECTORS = [
     'nav', 'header', 'footer', '.nav', '.navigation', '.header', '.footer',
     '.menu', '.sidebar', '.breadcrumb', '.pagination', '#nav', '#header', '#footer'
@@ -278,31 +276,31 @@ export class ContentPatternAnalyzer {
   }
 
   // Minimal implementations for required methods
-  private async generateContentPatterns(contentPages: ContentPage[]): Promise<ContentPattern[]> {
+  private async generateContentPatterns(_contentPages: ContentPage[]): Promise<ContentPattern[]> {
     return []; // Simplified implementation
   }
 
-  private findCommonStructures(patterns: ContentPattern[]): DOMStructure[] {
+  private findCommonStructures(_patterns: ContentPattern[]): DOMStructure[] {
     return []; // Simplified implementation
   }
 
-  private generateContentSelectors(patterns: ContentPattern[]): string[] {
+  private generateContentSelectors(_patterns: ContentPattern[]): string[] {
     return []; // Simplified implementation
   }
 
-  private generateExclusionSelectors(contentPages: ContentPage[]): string[] {
+  private generateExclusionSelectors(_contentPages: ContentPage[]): string[] {
     return this.NAVIGATION_SELECTORS; // Return default navigation selectors
   }
 
-  private findCommonContentContainer(patterns: ContentPattern[]): string {
+  private findCommonContentContainer(_patterns: ContentPattern[]): string {
     return ''; // Simplified implementation
   }
 
-  private generateContentVariations(patterns: ContentPattern[]): ContentVariation[] {
+  private generateContentVariations(_patterns: ContentPattern[]): ContentVariation[] {
     return []; // Simplified implementation
   }
 
-  private calculatePatternConfidence(patterns: ContentPattern[], commonStructures: DOMStructure[]): number {
+  private calculatePatternConfidence(_patterns: ContentPattern[], _commonStructures: DOMStructure[]): number {
     return 0.5; // Default confidence
   }
 
@@ -311,8 +309,8 @@ export class ContentPatternAnalyzer {
    * Requirement 8.2: Identify content patterns and find similar content
    */
   async findSimilarContentOnMainPage(
-    mainPageHtml: string,
-    contentPatterns: ContentPattern[]
+    _mainPageHtml: string,
+    _contentPatterns: ContentPattern[]
   ): Promise<ContentMatch[]> {
     // Simplified implementation
     return [];
@@ -323,8 +321,8 @@ export class ContentPatternAnalyzer {
    * Requirement 8.3: Create list container detection logic
    */
   async identifyListContainers(
-    mainPageHtml: string,
-    contentMatches: ContentMatch[]
+    _mainPageHtml: string,
+    _contentMatches: ContentMatch[]
   ): Promise<ListContainer[]> {
     // Simplified implementation
     return [];

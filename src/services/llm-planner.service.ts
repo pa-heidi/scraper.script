@@ -19,9 +19,6 @@ import { getCentralizedLLMService, LLMRequest } from './centralized-llm.service'
 import { PlaywrightExecutor } from './playwright-executor.service';
 import { logger } from "../utils/logger";
 
-// Add fetch for Node.js environments that don't have it globally
-import fetch from "node-fetch";
-
 export interface SiteAnalysis {
     url: string;
     compressedHtml: string;

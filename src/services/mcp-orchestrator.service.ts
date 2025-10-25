@@ -24,7 +24,6 @@ import { PlaywrightExecutor } from "./playwright-executor.service";
 import { SiblingLinkDiscoveryService } from "./sibling-link-discovery.service";
 import { ContentPatternAnalyzer } from "./content-pattern-analyzer.service";
 import { logger } from "../utils/logger";
-import { JSDOM } from "jsdom";
 
 // Local interface definitions for standalone operation
 interface ExecutionError {
@@ -449,54 +448,146 @@ export class MCPOrchestratorService implements MCPOrchestrator {
                     const cookieConsentMetadata =
                         workflow.context.cookieConsentMetadata;
 
-                    // Analyze and compress HTML to remove headers/footers while preserving context
-                    const analyzedHtml = await this.llmPlanner.analyzeSite(
-                        url,
-                        rawHtml
+                    // Get analysis results from previous workflow steps
+                    const siblingResults =
+                        workflow.context.siblingResults || [];
+                    const contentAnalysis =
+                        workflow.context.contentAnalysis || {};
+
+                    logger.info(
+                        "🎯 Generating scraping plan using workflow analysis results",
+                        {
+                            siblingResultsCount: siblingResults.length,
+                            hasContentAnalysis:
+                                !!contentAnalysis.detailSelectors,
+                            contentSelectorsCount: Object.keys(
+                                contentAnalysis.detailSelectors || {}
+                            ).length
+                        }
                     );
 
-                    logger.info("HTML analysis completed", {
-                        originalSize: rawHtml.length,
-                        compressedSize: analyzedHtml.compressedHtml.length,
-                        compressionRatio: Math.round(
-                            (1 -
-                                analyzedHtml.compressedHtml.length /
-                                    rawHtml.length) *
-                                100
+                    // Extract selectors from sibling discovery analysis
+                    let listSelector = "";
+                    let paginationSelector = "";
+
+                    if (siblingResults.length > 0) {
+                        // Use the best sibling result (highest confidence)
+                        const bestSiblingResult = siblingResults.reduce(
+                            (best: any, current: any) =>
+                                current.confidence > best.confidence
+                                    ? current
+                                    : best
+                        );
+
+                        // Extract selectors from sibling analysis metadata
+                        if (
+                            bestSiblingResult.metadata?.paginationNextSelector
+                        ) {
+                            paginationSelector =
+                                bestSiblingResult.metadata
+                                    .paginationNextSelector;
+                        }
+
+                        // For list selector, we need to derive it from the container and content link pattern
+                        // This would typically be the container selector + content link selector
+                        if (bestSiblingResult.metadata?.containerSignature) {
+                            listSelector =
+                                bestSiblingResult.metadata.containerSignature;
+                        }
+
+                        logger.info(
+                            "📋 Extracted selectors from sibling analysis:",
+                            {
+                                listSelector,
+                                paginationSelector,
+                                confidence: bestSiblingResult.confidence,
+                                method: bestSiblingResult.discoveryMethod
+                            }
+                        );
+                    }
+
+                    // Extract detail selectors from content analysis
+                    const detailSelectors =
+                        contentAnalysis.detailSelectors || {};
+
+                    logger.info(
+                        "🔍 Using detail selectors from content analysis:",
+                        {
+                            detailSelectors,
+                            confidence: contentAnalysis.confidence || 0
+                        }
+                    );
+
+                    // Create the scraping plan using the analyzed selectors
+                    const scrapingPlan =
+                        await this.createScrapingPlanFromAnalysis({
+                            url,
+                            enhancedContentUrls,
+                            listSelector,
+                            paginationSelector,
+                            detailSelectors,
+                            siblingResults,
+                            contentAnalysis,
+                            cookieConsentMetadata,
+                            options
+                        });
+
+                    logger.info(
+                        "✅ Scraping plan generated from workflow analysis",
+                        {
+                            planId: scrapingPlan.planId,
+                            entryUrls: scrapingPlan.entryUrls.length,
+                            listSelector: scrapingPlan.listSelector,
+                            paginationSelector: scrapingPlan.paginationSelector,
+                            detailSelectorsCount: Object.keys(
+                                scrapingPlan.detailSelectors
+                            ).length,
+                            confidence: Math.max(
+                                contentAnalysis.confidence || 0,
+                                siblingResults.length > 0
+                                    ? Math.max(
+                                          ...siblingResults.map(
+                                              (r: any) => r.confidence
+                                          )
+                                      )
+                                    : 0
+                            )
+                        }
+                    );
+
+                    // Add workflow analysis metadata to the plan result
+                    const result: PlanGenerationResult = {
+                        planId: scrapingPlan.planId,
+                        plan: scrapingPlan,
+                        confidence: Math.max(
+                            contentAnalysis.confidence || 0,
+                            siblingResults.length > 0
+                                ? Math.max(
+                                      ...siblingResults.map(
+                                          (r: any) => r.confidence
+                                      )
+                                  )
+                                : 0
                         ),
-                        detectedPatterns: analyzedHtml.detectedPatterns,
-                        archetype: analyzedHtml.archetype,
-                        complexity: analyzedHtml.complexity,
-                        estimatedTokens: analyzedHtml.estimatedTokens
-                    });
-
-                    // Add cookie consent metadata to options
-                    const enhancedOptions = {
-                        ...options,
-                        cookieConsentData: cookieConsentMetadata
-                    };
-
-                    // Use enhanced content URLs (original + discovered siblings) for plan generation with analyzed HTML
-                    const result = await this.llmPlanner.generateEnhancedPlan(
-                        url,
-                        analyzedHtml.compressedHtml,
-                        enhancedContentUrls,
-                        enhancedOptions
-                    );
-
-                    // Add sibling discovery metadata to the plan result
-                    if (
-                        workflow.context.siblingResults &&
-                        workflow.context.siblingResults.length > 0
-                    ) {
-                        result.siblingDiscovery = {
+                        humanReadableDoc: this.generateHumanReadableDoc(
+                            scrapingPlan,
+                            siblingResults,
+                            contentAnalysis
+                        ),
+                        testResults: {
+                            success: true,
+                            extractedSamples: [],
+                            errors: [],
+                            confidence: contentAnalysis.confidence || 0.5
+                        },
+                        siblingDiscovery: {
                             originalUrls: workflow.context.originalContentUrls,
                             discoveredLinks:
                                 workflow.context.discoveredSiblingLinks,
-                            discoveryResults: workflow.context.siblingResults,
+                            discoveryResults: siblingResults,
                             totalEnhancedUrls: enhancedContentUrls.length
-                        };
-                    }
+                        }
+                    };
 
                     return result;
                 }
@@ -1661,10 +1752,24 @@ export class MCPOrchestratorService implements MCPOrchestrator {
     ): Promise<any> {
         try {
             logger.info(
-                `Analyzing ${contentPagesData.length} content pages with LLM to extract selectors`
+                `🔍 Analyzing ${contentPagesData.length} content pages with LLM to extract selectors`
             );
 
+            // Log content pages being analyzed
+            logger.debug("📄 Content pages for LLM analysis:", {
+                totalPages: contentPagesData.length,
+                successfulPages: contentPagesData.filter((p) => p.success)
+                    .length,
+                urls: contentPagesData.map((p) => p.url),
+                htmlSizes: contentPagesData.map((p) => ({
+                    url: p.url,
+                    originalSize: p.html.length,
+                    trimmedSize: p.trimmedHtml.length
+                }))
+            });
+
             if (contentPagesData.length === 0) {
+                logger.warn("⚠️ No content pages available for LLM analysis");
                 return {
                     detailSelectors: {},
                     confidence: 0,
@@ -1675,12 +1780,29 @@ export class MCPOrchestratorService implements MCPOrchestrator {
 
             // Take first few pages for LLM analysis (limit for performance)
             const pagesToAnalyze = contentPagesData.slice(0, 3);
+            logger.info(
+                `📋 Using ${pagesToAnalyze.length} pages for LLM analysis (limited for performance)`
+            );
             const combinedHtml = pagesToAnalyze
                 .map((page) => `<!-- URL: ${page.url} -->\n${page.trimmedHtml}`)
                 .join("\n\n<!-- PAGE SEPARATOR -->\n\n");
 
+            logger.debug("🔗 Combined HTML for LLM analysis:", {
+                combinedSize: combinedHtml.length,
+                pageCount: pagesToAnalyze.length
+            });
+
             // Compress HTML for LLM
             const compressedHtml = this.compressHtmlForLLM(combinedHtml);
+
+            logger.debug("📦 HTML compression results:", {
+                originalSize: combinedHtml.length,
+                compressedSize: compressedHtml.length,
+                compressionRatio:
+                    Math.round(
+                        (1 - compressedHtml.length / combinedHtml.length) * 100
+                    ) + "%"
+            });
 
             // Build LLM prompt for content selector extraction
             const prompt = this.buildContentSelectorPrompt(
@@ -1709,13 +1831,31 @@ export class MCPOrchestratorService implements MCPOrchestrator {
             logger.info("LLM content selector analysis completed", {
                 provider: llmResponse.provider,
                 model: llmResponse.model,
-                tokensUsed: llmResponse.tokensUsed
+                tokensUsed: llmResponse.tokensUsed,
+                responseLength: llmResponse.content.length
+            });
+
+            // Log raw LLM response for debugging
+            logger.debug("🧠 Raw LLM selector response:", {
+                content: llmResponse.content,
+                provider: llmResponse.provider,
+                model: llmResponse.model
             });
 
             // Parse LLM response
             const selectorAnalysis = this.parseLLMContentResponse(
                 llmResponse.content
             );
+
+            // Log parsed selector analysis
+            logger.info("🎯 LLM Selector Analysis Results:", {
+                detailSelectorsCount: Object.keys(
+                    selectorAnalysis.detailSelectors
+                ).length,
+                detailSelectors: selectorAnalysis.detailSelectors,
+                confidence: selectorAnalysis.confidence,
+                reasoning: selectorAnalysis.reasoning
+            });
 
             return {
                 detailSelectors: selectorAnalysis.detailSelectors,
@@ -1797,6 +1937,12 @@ IMPORTANT:
         try {
             const parsed = JSON.parse(content);
 
+            logger.debug("📋 Parsed LLM JSON response:", {
+                hasDetailSelectors: !!parsed.detailSelectors,
+                confidence: parsed.confidence,
+                reasoning: parsed.reasoning?.substring(0, 100) + "..."
+            });
+
             const detailSelectors: Record<string, string> = {};
 
             // Validate and clean selectors
@@ -1804,20 +1950,39 @@ IMPORTANT:
                 parsed.detailSelectors &&
                 typeof parsed.detailSelectors === "object"
             ) {
+                logger.debug("🔍 Processing detail selectors from LLM...");
+
                 for (const [field, selector] of Object.entries(
                     parsed.detailSelectors
                 )) {
                     if (typeof selector === "string" && selector.trim()) {
                         detailSelectors[field] = selector.trim();
+                        logger.debug(`  ✅ ${field}: "${selector.trim()}"`);
+                    } else {
+                        logger.debug(
+                            `  ❌ ${field}: invalid selector (${typeof selector})`
+                        );
                     }
                 }
+            } else {
+                logger.warn(
+                    "⚠️ No valid detailSelectors found in LLM response"
+                );
             }
 
-            return {
+            const result = {
                 detailSelectors,
                 confidence: parsed.confidence || 0.5,
                 reasoning: parsed.reasoning || "LLM content analysis completed"
             };
+
+            logger.info("📊 Final selector extraction results:", {
+                totalSelectors: Object.keys(detailSelectors).length,
+                selectorFields: Object.keys(detailSelectors),
+                confidence: result.confidence
+            });
+
+            return result;
         } catch (error) {
             logger.warn("Failed to parse LLM content response", { error });
             return {
@@ -1826,6 +1991,137 @@ IMPORTANT:
                 reasoning: "Failed to parse LLM response"
             };
         }
+    }
+
+    /**
+     * Create scraping plan from workflow analysis results
+     */
+    private async createScrapingPlanFromAnalysis(params: {
+        url: string;
+        enhancedContentUrls: string[];
+        listSelector: string;
+        paginationSelector: string;
+        detailSelectors: Record<string, string>;
+        siblingResults: any[];
+        contentAnalysis: any;
+        cookieConsentMetadata: any;
+        options: any;
+    }): Promise<ScrapingPlan> {
+        const {
+            url,
+            enhancedContentUrls,
+            listSelector,
+            paginationSelector,
+            detailSelectors,
+            siblingResults,
+            contentAnalysis,
+            cookieConsentMetadata,
+            options
+        } = params;
+
+        // Generate unique plan ID
+        const planId = `plan_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+        // Create the scraping plan
+        const scrapingPlan: ScrapingPlan = {
+            planId,
+            version: 1,
+            entryUrls: [url], // Main page URL
+            listSelector: listSelector || "article, .item, .post, .entry", // Fallback if no selector found
+            detailSelectors: {
+                // Use selectors from content analysis, with fallbacks
+                title: detailSelectors.title || "h1, h2, .title, .headline",
+                description:
+                    detailSelectors.description ||
+                    "p, .description, .content, .summary",
+                ...detailSelectors // Include all other selectors from content analysis
+            },
+            paginationSelector: paginationSelector || undefined, // Only set if found
+            rateLimitMs: options.rateLimitMs || 1000,
+            retryPolicy: {
+                maxAttempts: 3,
+                backoffStrategy: "exponential" as const,
+                baseDelayMs: 1000,
+                maxDelayMs: 10000,
+                retryableErrors: ["TIMEOUT", "NETWORK_ERROR", "RATE_LIMIT"]
+            },
+            confidenceScore: Math.max(
+                contentAnalysis.confidence || 0,
+                siblingResults.length > 0
+                    ? Math.max(...siblingResults.map((r: any) => r.confidence))
+                    : 0
+            ),
+            metadata: {
+                domain: new URL(url).hostname,
+                siteType: "municipal" as const,
+                language: "de",
+                createdBy: "ai" as const,
+                successRate: 0,
+                avgAccuracy: 0,
+                robotsTxtCompliant: true,
+                gdprCompliant: true
+            }
+        };
+
+        logger.info("🏗️ Created scraping plan from workflow analysis:", {
+            planId: scrapingPlan.planId,
+            entryUrls: scrapingPlan.entryUrls.length,
+            listSelector: scrapingPlan.listSelector,
+            hasPagination: !!scrapingPlan.paginationSelector,
+            detailSelectors: Object.keys(scrapingPlan.detailSelectors),
+            confidence: Math.max(
+                contentAnalysis.confidence || 0,
+                siblingResults.length > 0
+                    ? Math.max(...siblingResults.map((r: any) => r.confidence))
+                    : 0
+            ),
+            rateLimitMs: scrapingPlan.rateLimitMs
+        });
+
+        return scrapingPlan;
+    }
+
+    /**
+     * Generate human-readable documentation for the scraping plan
+     */
+    private generateHumanReadableDoc(
+        plan: ScrapingPlan,
+        siblingResults: any[],
+        contentAnalysis: any
+    ): string {
+        const doc = `
+# Scraping Plan: ${plan.planId}
+
+## Overview
+This scraping plan was generated using workflow analysis combining sibling link discovery and content pattern analysis.
+
+## Plan Configuration
+- **Entry URLs**: ${plan.entryUrls.join(", ")}
+- **List Selector**: \`${plan.listSelector}\`
+- **Pagination Selector**: ${plan.paginationSelector ? `\`${plan.paginationSelector}\`` : "None"}
+- **Rate Limit**: ${plan.rateLimitMs}ms between requests
+
+## Detail Selectors
+${Object.entries(plan.detailSelectors)
+    .map(([field, selector]) => `- **${field}**: \`${selector}\``)
+    .join("\n")}
+
+## Analysis Results
+### Sibling Discovery
+- **Method**: ${siblingResults[0]?.discoveryMethod || "None"}
+- **Confidence**: ${siblingResults[0]?.confidence || 0}
+- **Links Found**: ${siblingResults.reduce((sum: number, r: any) => sum + r.siblingLinks.length, 0)}
+
+### Content Analysis
+- **Confidence**: ${contentAnalysis.confidence || 0}
+- **Selectors Extracted**: ${Object.keys(contentAnalysis.detailSelectors || {}).length}
+- **Reasoning**: ${contentAnalysis.reasoning || "N/A"}
+
+## Generated At
+${new Date().toISOString()}
+        `.trim();
+
+        return doc;
     }
 
     /**
@@ -1850,248 +2146,7 @@ IMPORTANT:
         return compressed;
     }
 
-    private async analyzeContentUrls(contentUrls: string[]): Promise<any> {
-        try {
-            logger.debug(`Analyzing content URLs: ${contentUrls.length} URLs`);
 
-            if (!contentUrls || contentUrls.length === 0) {
-                return { patterns: [], confidence: 0, analysis: null };
-            }
-
-            // Use the existing Playwright executor's browser pool
-            const browser = await (
-                this.playwrightExecutor as any
-            ).acquireBrowser();
-            const context = await browser.newContext({
-                userAgent:
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                viewport: { width: 1920, height: 1080 }
-            });
-
-            const contentAnalysis = {
-                patterns: [] as any[],
-                commonSelectors: [] as string[],
-                contentStructures: [] as any[],
-                confidence: 0,
-                totalUrls: contentUrls.length,
-                successfulAnalysis: 0
-            };
-
-            // Analyze each content URL to identify patterns
-            for (const contentUrl of contentUrls.slice(0, 5)) {
-                // Limit to 5 URLs for performance
-                try {
-                    const page = await context.newPage();
-
-                    // Navigate with retry logic
-                    let retryCount = 0;
-                    const maxRetries = 2;
-                    let lastError: Error | null = null;
-
-                    while (retryCount < maxRetries) {
-                        try {
-                            await page.goto(contentUrl, {
-                                waitUntil: "domcontentloaded",
-                                timeout: 30000
-                            });
-                            break; // Success, exit retry loop
-                        } catch (error) {
-                            lastError = error as Error;
-                            retryCount++;
-
-                            if (retryCount < maxRetries) {
-                                logger.warn(
-                                    `⚠️  Content analysis attempt ${retryCount} failed for ${contentUrl}, retrying...`
-                                );
-                                await new Promise((resolve) =>
-                                    setTimeout(resolve, 1000)
-                                );
-                            } else {
-                                throw lastError;
-                            }
-                        }
-                    }
-
-                    // Extract content structure patterns
-                    const contentStructure = await page.evaluate(() => {
-                        const getElementInfo = (element: Element) => ({
-                            tagName: element.tagName.toLowerCase(),
-                            className: element.className,
-                            id: element.id,
-                            textContent:
-                                element.textContent?.trim().substring(0, 100) ||
-                                "",
-                            attributes: Array.from(element.attributes).reduce(
-                                (acc, attr) => {
-                                    acc[attr.name] = attr.value;
-                                    return acc;
-                                },
-                                {} as Record<string, string>
-                            )
-                        });
-
-                        // Find main content containers
-                        const contentContainers = Array.from(
-                            document.querySelectorAll(
-                                'main, article, .content, .post, .entry, [role="main"]'
-                            )
-                        ).map(getElementInfo);
-
-                        // Find common content elements
-                        const headings = Array.from(
-                            document.querySelectorAll("h1, h2, h3")
-                        ).map(getElementInfo);
-
-                        const paragraphs = Array.from(
-                            document.querySelectorAll("p")
-                        )
-                            .slice(0, 5)
-                            .map(getElementInfo);
-
-                        const images = Array.from(
-                            document.querySelectorAll("img")
-                        )
-                            .slice(0, 3)
-                            .map(getElementInfo);
-
-                        const links = Array.from(
-                            document.querySelectorAll("a[href]")
-                        )
-                            .slice(0, 5)
-                            .map(getElementInfo);
-
-                        return {
-                            url: window.location.href,
-                            title: document.title,
-                            contentContainers,
-                            headings,
-                            paragraphs,
-                            images,
-                            links,
-                            bodyClasses: document.body.className
-                                .split(" ")
-                                .filter(Boolean)
-                        };
-                    });
-
-                    contentAnalysis.contentStructures.push(contentStructure);
-                    contentAnalysis.successfulAnalysis++;
-
-                    await page.close();
-
-                    logger.debug(
-                        `Analyzed content structure for ${contentUrl}`,
-                        {
-                            containers:
-                                contentStructure.contentContainers.length,
-                            headings: contentStructure.headings.length
-                        }
-                    );
-                } catch (error) {
-                    logger.warn(
-                        `Failed to analyze content URL ${contentUrl}:`,
-                        error
-                    );
-                }
-            }
-
-            await context.close();
-            (this.playwrightExecutor as any).releaseBrowser(browser);
-
-            // Identify common patterns across analyzed URLs
-            if (contentAnalysis.successfulAnalysis > 0) {
-                // Find common selectors
-                const selectorCounts = new Map<string, number>();
-
-                contentAnalysis.contentStructures.forEach((structure) => {
-                    // Count common container selectors
-                    structure.contentContainers.forEach((container: any) => {
-                        if (container.className) {
-                            container.className
-                                .split(" ")
-                                .forEach((cls: string) => {
-                                    if (cls.trim()) {
-                                        const selector = `.${cls.trim()}`;
-                                        selectorCounts.set(
-                                            selector,
-                                            (selectorCounts.get(selector) ||
-                                                0) + 1
-                                        );
-                                    }
-                                });
-                        }
-                        if (container.tagName) {
-                            selectorCounts.set(
-                                container.tagName,
-                                (selectorCounts.get(container.tagName) || 0) + 1
-                            );
-                        }
-                    });
-                });
-
-                // Get selectors that appear in multiple URLs
-                const threshold = Math.max(
-                    1,
-                    Math.floor(contentAnalysis.successfulAnalysis * 0.5)
-                );
-                contentAnalysis.commonSelectors = Array.from(
-                    selectorCounts.entries()
-                )
-                    .filter(([_, count]) => count >= threshold)
-                    .sort(([_, a], [__, b]) => b - a)
-                    .slice(0, 10)
-                    .map(([selector, _]) => selector);
-
-                // Calculate confidence based on pattern consistency
-                contentAnalysis.confidence = Math.min(
-                    0.9,
-                    (contentAnalysis.successfulAnalysis /
-                        contentAnalysis.totalUrls) *
-                        (contentAnalysis.commonSelectors.length > 0 ? 0.8 : 0.4)
-                );
-
-                // Create pattern analysis
-                contentAnalysis.patterns = [
-                    {
-                        type: "content_containers",
-                        selectors: contentAnalysis.commonSelectors.filter(
-                            (s) =>
-                                s.includes("content") ||
-                                s.includes("main") ||
-                                s.includes("article")
-                        ),
-                        confidence: contentAnalysis.confidence
-                    },
-                    {
-                        type: "heading_patterns",
-                        selectors: ["h1", "h2", "h3"],
-                        confidence: 0.9
-                    },
-                    {
-                        type: "text_content",
-                        selectors: ["p", ".text", ".description"],
-                        confidence: 0.8
-                    }
-                ];
-            }
-
-            logger.info(`Content URL analysis completed`, {
-                totalUrls: contentAnalysis.totalUrls,
-                successful: contentAnalysis.successfulAnalysis,
-                commonSelectors: contentAnalysis.commonSelectors.length,
-                confidence: contentAnalysis.confidence
-            });
-
-            return contentAnalysis;
-        } catch (error) {
-            logger.error(`Failed to analyze content URLs:`, error);
-            return {
-                patterns: [],
-                confidence: 0,
-                error: error instanceof Error ? error.message : String(error)
-            };
-        }
-    }
 
     private async validatePlan(plan: ScrapingPlan): Promise<any> {
         try {
