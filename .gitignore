@@ -117,3 +117,6 @@ quick-test.*
 *.jpeg
 *.gif
 *.webp
+
+# Generated plan files
+plans/

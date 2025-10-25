@@ -6,6 +6,8 @@
  */
 
 import * as readline from 'readline';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import { MCPOrchestratorService } from '../services/mcp-orchestrator.service';
 import { PlanOptions } from '../interfaces/core';
 
@@ -53,6 +55,9 @@ class PlanGeneratorCLI {
 
       // Display results
       this.displayResults(result);
+
+      // Save results to markdown file
+      await this.saveResultsToFile(result, userInput.url);
 
       // Ask if user wants to test the plan
       const shouldTest = await this.askYesNo('\nWould you like to test this plan? (y/n): ');
@@ -235,6 +240,156 @@ class PlanGeneratorCLI {
     console.log('\nHuman-Readable Documentation:');
     console.log('-----------------------------');
     console.log(result.humanReadableDoc);
+  }
+
+  /**
+   * Save generation results to markdown file
+   */
+  private async saveResultsToFile(result: any, url: string): Promise<void> {
+    try {
+      // Create filename based on domain and timestamp
+      const domain = new URL(url).hostname.replace(/\./g, '-');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `scraping-plan-${domain}-${timestamp}.md`;
+      const filepath = path.join(process.cwd(), 'plans', filename);
+
+      // Ensure plans directory exists
+      await fs.mkdir(path.dirname(filepath), { recursive: true });
+
+      // Generate markdown content
+      const markdown = this.generateMarkdownReport(result, url);
+
+      // Write to file
+      await fs.writeFile(filepath, markdown, 'utf8');
+
+      console.log(`\n📄 Plan saved to: ${filepath}`);
+    } catch (error) {
+      console.error('❌ Failed to save plan to file:', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /**
+   * Generate markdown report from results
+   */
+  private generateMarkdownReport(result: any, url: string): string {
+    const timestamp = new Date().toISOString();
+    const domain = new URL(url).hostname;
+
+    let markdown = `# 🕷️ Scraping Plan Report
+
+**Generated:** ${timestamp}
+**Target URL:** [${url}](${url})
+**Domain:** ${domain}
+**Plan ID:** \`${result.planId}\`
+**Confidence:** ${(result.confidence * 100).toFixed(1)}%
+
+## 📋 Plan Overview
+
+| Property | Value |
+|----------|-------|
+| Entry URLs | ${result.plan.entryUrls.length} |
+| List Selector | \`${result.plan.listSelector}\` |
+| Rate Limit | ${result.plan.rateLimitMs}ms |
+| Max Retries | ${result.plan.retryPolicy.maxAttempts} |
+
+`;
+
+    // Add pagination selector if present
+    if (result.plan.paginationSelector) {
+      markdown += `| Pagination Selector | \`${result.plan.paginationSelector}\` |\n`;
+    }
+
+    // Add detail selectors
+    markdown += `\n## 🎯 Detail Selectors
+
+| Field | Selector |
+|-------|----------|
+`;
+    Object.entries(result.plan.detailSelectors).forEach(([field, selector]) => {
+      markdown += `| ${field} | \`${selector}\` |\n`;
+    });
+
+    // Add exclude selectors if present
+    if (result.plan.excludeSelectors && result.plan.excludeSelectors.length > 0) {
+      markdown += `\n## 🚫 Exclude Selectors
+
+`;
+      result.plan.excludeSelectors.forEach((selector: string) => {
+        markdown += `- \`${selector}\`\n`;
+      });
+    }
+
+    // Add sibling discovery results if present
+    if (result.siblingDiscovery) {
+      markdown += `\n## 🔗 Sibling Link Discovery
+
+| Metric | Count |
+|--------|-------|
+| Original URLs | ${result.siblingDiscovery.originalUrls.length} |
+| Discovered Links | ${result.siblingDiscovery.discoveredLinks.length} |
+| Total Enhanced URLs | ${result.siblingDiscovery.totalEnhancedUrls} |
+
+`;
+    }
+
+    // Add test results if present
+    if (result.testResults) {
+      markdown += `\n## 🧪 Test Results
+
+| Metric | Value |
+|--------|-------|
+| Success | ${result.testResults.success ? '✅' : '❌'} |
+| Sample Items | ${result.testResults.extractedSamples.length} |
+| Confidence | ${(result.testResults.confidence * 100).toFixed(1)}% |
+
+`;
+      if (result.testResults.errors.length > 0) {
+        markdown += `### ❌ Errors
+
+`;
+        result.testResults.errors.forEach((error: string) => {
+          markdown += `- ${error}\n`;
+        });
+        markdown += '\n';
+      }
+    }
+
+    // Add human-readable documentation
+    markdown += `\n## 📖 Documentation
+
+${result.humanReadableDoc}
+
+`;
+
+    // Add complete plan as JSON
+    markdown += `\n## 📄 Complete Plan (JSON)
+
+\`\`\`json
+${JSON.stringify(result.plan, null, 2)}
+\`\`\`
+
+`;
+
+    // Add metadata
+    markdown += `\n## ℹ️ Metadata
+
+| Property | Value |
+|----------|-------|
+| Domain | ${result.plan.metadata.domain} |
+| Site Type | ${result.plan.metadata.siteType} |
+| Language | ${result.plan.metadata.language} |
+| Created By | ${result.plan.metadata.createdBy} |
+| Robots.txt Compliant | ${result.plan.metadata.robotsTxtCompliant ? '✅' : '❌'} |
+| GDPR Compliant | ${result.plan.metadata.gdprCompliant ? '✅' : '❌'} |
+
+`;
+
+    // Add generation timestamp
+    markdown += `\n---
+*Generated by AI Scraper Service CLI on ${timestamp}*
+`;
+
+    return markdown;
   }
 
   /**
