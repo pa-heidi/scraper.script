@@ -203,8 +203,17 @@ class PlanGeneratorCLI {
 
     console.log('\nDetail Selectors:');
     Object.entries(result.plan.detailSelectors).forEach(([field, selector]) => {
-      console.log(`  ${field}: ${selector}`);
+      const isRichContent = result.plan.richContentFields?.includes(field);
+      const contentType = isRichContent ? ' (Rich HTML)' : ' (Text)';
+      console.log(`  ${field}${contentType}: ${selector}`);
     });
+
+    if (result.plan.richContentFields && result.plan.richContentFields.length > 0) {
+      console.log('\nRich Content Fields (HTML):');
+      result.plan.richContentFields.forEach((field: string) => {
+        console.log(`  ✨ ${field}: Preserves HTML formatting for WYSIWYG display`);
+      });
+    }
 
     if (result.plan.excludeSelectors && result.plan.excludeSelectors.length > 0) {
       console.log('\nExclude Selectors:');
@@ -240,6 +249,14 @@ class PlanGeneratorCLI {
       console.log(`  Original URLs: ${result.siblingDiscovery.originalUrls.length}`);
       console.log(`  Discovered Links: ${result.siblingDiscovery.discoveredLinks.length}`);
       console.log(`  Total Enhanced URLs: ${result.siblingDiscovery.totalEnhancedUrls}`);
+
+      // Show content link selector if available
+      if (result.siblingDiscovery.discoveryResults && result.siblingDiscovery.discoveryResults.length > 0) {
+        const bestResult = result.siblingDiscovery.discoveryResults[0];
+        if (bestResult.metadata?.contentLinkSelector) {
+          console.log(`  Content Link Selector: ${bestResult.metadata.contentLinkSelector}`);
+        }
+      }
     }
 
     if (result.testResults) {
@@ -321,12 +338,28 @@ class PlanGeneratorCLI {
     // Add detail selectors
     markdown += `\n## 🎯 Detail Selectors
 
-| Field | Selector |
-|-------|----------|
+| Field | Content Type | Selector |
+|-------|--------------|----------|
 `;
     Object.entries(result.plan.detailSelectors).forEach(([field, selector]) => {
-      markdown += `| ${field} | \`${selector}\` |\n`;
+      const isRichContent = result.plan.richContentFields?.includes(field);
+      const contentType = isRichContent ? '🎨 Rich HTML' : '📝 Text';
+      markdown += `| ${field} | ${contentType} | \`${selector}\` |\n`;
     });
+
+    // Add rich content fields section if present
+    if (result.plan.richContentFields && result.plan.richContentFields.length > 0) {
+      markdown += `
+### ✨ Rich Content Fields
+
+The following fields extract HTML content (innerHTML) for WYSIWYG display:
+
+`;
+      result.plan.richContentFields.forEach((field: string) => {
+        markdown += `- **${field}**: Preserves HTML formatting, links, images, and other rich content elements\n`;
+      });
+      markdown += '\n';
+    }
 
     // Add exclude selectors if present
     if (result.plan.excludeSelectors && result.plan.excludeSelectors.length > 0) {
@@ -349,6 +382,24 @@ class PlanGeneratorCLI {
 | Total Enhanced URLs | ${result.siblingDiscovery.totalEnhancedUrls} |
 
 `;
+
+      // Add content link selector information if available
+      if (result.siblingDiscovery.discoveryResults && result.siblingDiscovery.discoveryResults.length > 0) {
+        const bestResult = result.siblingDiscovery.discoveryResults[0];
+        if (bestResult.metadata?.contentLinkSelector) {
+          markdown += `### 🎯 Content Link Selector
+
+The following selector was identified to extract all similar content links:
+
+\`\`\`css
+${bestResult.metadata.contentLinkSelector}
+\`\`\`
+
+> **💡 Usage**: This selector targets all content links within the container and is used as the primary list selector for scraping.
+
+`;
+        }
+      }
     }
 
     // Add test results if present

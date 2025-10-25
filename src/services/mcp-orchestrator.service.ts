@@ -472,11 +472,14 @@ export class MCPOrchestratorService implements MCPOrchestrator {
                                     .paginationNextSelector;
                         }
 
-                        // For list selector, we need to derive it from the container and content link pattern
-                        // This would typically be the container selector + content link selector
-                        if (bestSiblingResult.metadata?.containerSignature) {
-                            listSelector =
-                                bestSiblingResult.metadata.containerSignature;
+                        // For list selector, prioritize contentLinkSelector over containerSignature
+                        // contentLinkSelector is more precise and targets actual links
+                        if (bestSiblingResult.metadata?.contentLinkSelector) {
+                            listSelector = bestSiblingResult.metadata.contentLinkSelector;
+                            logger.info("🎯 Using contentLinkSelector as listSelector for precise link targeting");
+                        } else if (bestSiblingResult.metadata?.containerSignature) {
+                            listSelector = bestSiblingResult.metadata.containerSignature;
+                            logger.info("📦 Using containerSignature as listSelector (fallback)");
                         }
 
                         logger.info(
@@ -484,6 +487,8 @@ export class MCPOrchestratorService implements MCPOrchestrator {
                             {
                                 listSelector,
                                 paginationSelector,
+                                contentLinkSelector: bestSiblingResult.metadata?.contentLinkSelector,
+                                containerSignature: bestSiblingResult.metadata?.containerSignature,
                                 confidence: bestSiblingResult.confidence,
                                 method: bestSiblingResult.discoveryMethod
                             }
@@ -1843,6 +1848,7 @@ export class MCPOrchestratorService implements MCPOrchestrator {
 
             return {
                 detailSelectors: selectorAnalysis.detailSelectors,
+                richContentFields: selectorAnalysis.richContentFields,
                 confidence: selectorAnalysis.confidence,
                 totalUrls: contentUrls.length,
                 analyzedUrls: contentPagesData.length,
@@ -1853,6 +1859,7 @@ export class MCPOrchestratorService implements MCPOrchestrator {
             logger.error("LLM content analysis failed:", error);
             return {
                 detailSelectors: {},
+                richContentFields: [],
                 confidence: 0,
                 totalUrls: contentUrls.length,
                 analyzedUrls: 0,
@@ -1875,30 +1882,38 @@ HTML Content:
 ${html}
 
 Extract CSS selectors for common content fields that appear across these pages. Focus on:
-- Title/Headline selectors
-- Description/Content text selectors
-- Date/Time selectors
-- Location/Address selectors
-- Contact information (email, phone) selectors
-- Image selectors
-- Link/URL selectors
+- Title/Headline selectors (text content)
+- Description/Content selectors (RICH HTML content for WYSIWYG display)
+- Date/Time selectors (text content)
+- Location/Address selectors (text content)
+- Contact information (email, phone) selectors (text content)
+- Image selectors (src attributes)
+- Link/URL selectors (href attributes)
 - Any other structured data fields
+
+IMPORTANT FOR RICH CONTENT:
+- For "description" field: Select the CONTAINER element that holds the full rich content (HTML with formatting, links, images, etc.)
+- For "descriptionText": Select for plain text extraction (fallback)
+- Rich content should preserve HTML formatting for WYSIWYG editors
+- Description containers should include paragraphs, lists, links, embedded images, etc.
 
 Respond with JSON:
 {
   "detailSelectors": {
-    "title": "CSS selector for titles/headlines",
-    "description": "CSS selector for main content/description",
-    "startDate": "CSS selector for dates/times",
-    "place": "CSS selector for location/venue",
-    "address": "CSS selector for addresses",
-    "email": "CSS selector for email addresses",
-    "phone": "CSS selector for phone numbers",
-    "website": "CSS selector for website links",
-    "images": "CSS selector for images"
+    "title": "CSS selector for titles/headlines (text)",
+    "description": "CSS selector for RICH HTML content container (innerHTML)",
+    "descriptionText": "CSS selector for plain text description (textContent fallback)",
+    "startDate": "CSS selector for dates/times (text)",
+    "place": "CSS selector for location/venue (text)",
+    "address": "CSS selector for addresses (text)",
+    "email": "CSS selector for email addresses (text)",
+    "phone": "CSS selector for phone numbers (text)",
+    "website": "CSS selector for website links (href)",
+    "images": "CSS selector for images (src)"
   },
+  "richContentFields": ["description"],
   "confidence": 0.85,
-  "reasoning": "Explanation of selector choices and confidence"
+  "reasoning": "Explanation of selector choices, especially for rich content containers"
 }
 
 IMPORTANT:
@@ -1915,6 +1930,7 @@ IMPORTANT:
      */
     private parseLLMContentResponse(content: string): {
         detailSelectors: Record<string, string>;
+        richContentFields: string[];
         confidence: number;
         reasoning: string;
     } {
@@ -1954,8 +1970,24 @@ IMPORTANT:
                 );
             }
 
+            // Extract rich content fields
+            const richContentFields: string[] = [];
+            if (Array.isArray(parsed.richContentFields)) {
+                richContentFields.push(...parsed.richContentFields.filter((field: any) =>
+                    typeof field === "string" && detailSelectors[field]
+                ));
+                logger.debug(`🎨 Rich content fields identified: ${richContentFields.join(", ")}`);
+            } else {
+                // Default: assume description is rich content if present
+                if (detailSelectors.description) {
+                    richContentFields.push("description");
+                    logger.debug("🎨 Defaulting 'description' as rich content field");
+                }
+            }
+
             const result = {
                 detailSelectors,
+                richContentFields,
                 confidence: parsed.confidence || 0.5,
                 reasoning: parsed.reasoning || "LLM content analysis completed"
             };
@@ -1963,6 +1995,7 @@ IMPORTANT:
             logger.info("📊 Final selector extraction results:", {
                 totalSelectors: Object.keys(detailSelectors).length,
                 selectorFields: Object.keys(detailSelectors),
+                richContentFields: richContentFields,
                 confidence: result.confidence
             });
 
@@ -1971,6 +2004,7 @@ IMPORTANT:
             logger.warn("Failed to parse LLM content response", { error });
             return {
                 detailSelectors: {},
+                richContentFields: [],
                 confidence: 0.3,
                 reasoning: "Failed to parse LLM response"
             };
@@ -2020,6 +2054,7 @@ IMPORTANT:
                     "p, .description, .content, .summary",
                 ...detailSelectors // Include all other selectors from content analysis
             },
+            richContentFields: contentAnalysis.richContentFields || [], // Fields that should extract HTML content
             paginationSelector: paginationSelector || undefined, // Only set if found
             rateLimitMs: options.rateLimitMs || 1000,
             retryPolicy: {
@@ -2129,14 +2164,26 @@ This scraping plan was generated using workflow analysis combining sibling link 
 ${cookieConsentSection}
 ## Detail Selectors
 ${Object.entries(plan.detailSelectors)
-    .map(([field, selector]) => `- **${field}**: \`${selector}\``)
+    .map(([field, selector]) => {
+        const isRichContent = plan.richContentFields?.includes(field);
+        const contentType = isRichContent ? " (Rich HTML Content)" : " (Text Content)";
+        return `- **${field}**${contentType}: \`${selector}\``;
+    })
     .join("\n")}
+
+${plan.richContentFields && plan.richContentFields.length > 0 ? `
+### Rich Content Fields
+The following fields extract HTML content (innerHTML) for WYSIWYG display:
+${plan.richContentFields.map((field: string) => `- **${field}**: Preserves HTML formatting, links, images, and other rich content`).join("\n")}
+` : ""}
 
 ## Analysis Results
 ### Sibling Discovery
 - **Method**: ${siblingResults[0]?.discoveryMethod || "None"}
 - **Confidence**: ${siblingResults[0]?.confidence || 0}
 - **Links Found**: ${siblingResults.reduce((sum: number, r: any) => sum + r.siblingLinks.length, 0)}
+- **Content Link Selector**: ${siblingResults[0]?.metadata?.contentLinkSelector ? `\`${siblingResults[0].metadata.contentLinkSelector}\`` : "Not detected"}
+- **Container Signature**: ${siblingResults[0]?.metadata?.containerSignature ? `\`${siblingResults[0].metadata.containerSignature}\`` : "Not detected"}
 
 ### Content Analysis
 - **Confidence**: ${contentAnalysis.confidence || 0}

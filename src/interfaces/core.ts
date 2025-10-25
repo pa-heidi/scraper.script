@@ -74,6 +74,7 @@ export interface ScrapingPlan {
   listSelector: string;
   paginationSelector?: string;
   detailSelectors: Record<string, string>;
+  richContentFields?: string[]; // NEW: Fields that should extract HTML content (innerHTML) instead of text
   excludeSelectors?: string[];
   rateLimitMs: number;
   retryPolicy: RetryPolicy;

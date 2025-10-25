@@ -28,6 +28,7 @@ export interface SiblingLinkResult {
         containerSignature?: string;
         paginationLinks?: string[];
         paginationNextSelector?: string; // NEW: Store the selector for next page
+        contentLinkSelector?: string; // NEW: Store the selector for content links
         isPaginated?: boolean;
         totalPages?: number;
     };
@@ -277,7 +278,7 @@ export class SiblingLinkDiscoveryService {
 
                     // Method 1: Use LLM-provided contentLinkSelector (primary method)
                     if (llmAnalysis.contentLinkSelector) {
-                        logger.info(`� Usinpg LLM content link selector: ${llmAnalysis.contentLinkSelector}`);
+                        logger.info(`� Using LLM content link selector: ${llmAnalysis.contentLinkSelector}`);
 
                         try {
                             // Use the content link selector to find all similar links in the container
@@ -451,6 +452,7 @@ export class SiblingLinkDiscoveryService {
                     containerSignature,
                     paginationLinks,
                     paginationNextSelector: llmAnalysis?.paginationNextSelector,
+                    contentLinkSelector: llmAnalysis?.contentLinkSelector, // NEW: Add content link selector for plan generation
                     isPaginated: paginationLinks.length > 0,
                     totalPages:
                         paginationLinks.length > 0
@@ -1132,13 +1134,24 @@ Respond with JSON:
   "reasoning": "Explanation of analysis and selector choices"
 }
 
-CRITICAL EXAMPLES:
-- If content links are in individual ".event-item" divs, use ".event-item a" for contentLinkSelector
-- If content links are in "article h2", use "article h2 a" for contentLinkSelector
-- If content links are in ".teaserblock_xs a", use ".teaserblock_xs a" for contentLinkSelector
-- For pagination, look for "Next", "Weiter", ">" buttons: use "a[title*='next']" or ".pagination .next" etc.
+CRITICAL SELECTOR REQUIREMENTS:
+- ALL selectors MUST be valid CSS syntax (no invalid characters like #[9])
+- contentLinkSelector should select ALL similar content links, not containers
+- Use descendant selectors to target links within containers
 
-The contentLinkSelector should be specific enough to get only content links, but broad enough to get all similar ones.
+VALID SELECTOR EXAMPLES:
+- If content links are in ".event-item" divs: use ".event-item a" for contentLinkSelector
+- If content links are in "article" tags: use "article a" or "article h2 a" for contentLinkSelector
+- If content links are in ".teaserblock_xs": use ".teaserblock_xs a" for contentLinkSelector
+- If content is in ".entries" div: use ".entries a" or ".entries .item a" for contentLinkSelector
+- For pagination: use "a[title*='next']", ".pagination .next", ".pager .next" etc.
+
+INVALID SELECTORS TO AVOID:
+- "div.entries#[9]" (invalid syntax with #[9])
+- "div:nth-child(9)" (too specific, won't work for all pages)
+- Just container names without targeting links
+
+The contentLinkSelector should be specific enough to get only content links, but broad enough to get all similar ones across different pages.
 
 Focus on finding containers with multiple similar CONTENT links, excluding pagination and navigation.
 ${heuristicResult?.container ? "Validate the heuristically found container and enhance the analysis." : "Perform comprehensive search since heuristics failed."}
