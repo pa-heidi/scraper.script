@@ -474,7 +474,6 @@ export class PlaywrightExecutor {
                 const consentResult = await cookieHandler.handleCookieConsent(page, currentUrl, {
                   strategy: cookieConsentInfo.strategy as any || 'accept-all',
                   timeout: 5000,
-                  useAI: false, // Use heuristics since we have some metadata
                   languages: ['de', 'en', 'fr'],
                   retryAttempts: 2,
                 });
@@ -495,7 +494,6 @@ export class PlaywrightExecutor {
               const consentResult = await cookieHandler.handleCookieConsent(page, currentUrl, {
                 strategy: cookieConsentInfo.strategy as any || 'accept-all',
                 timeout: 5000,
-                useAI: false, // Use heuristics since we have some metadata
                 languages: ['de', 'en', 'fr'],
                 retryAttempts: 2,
               });

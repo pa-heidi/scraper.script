@@ -1437,7 +1437,6 @@ export class MCPOrchestratorService implements MCPOrchestrator {
                         await cookieHandler.handleCookieConsent(page, url, {
                             strategy: "accept-all",
                             timeout: 5000,
-                            useAI: false, // Fast heuristics for HTML fetching
                             languages: ["de", "en"]
                         });
 
