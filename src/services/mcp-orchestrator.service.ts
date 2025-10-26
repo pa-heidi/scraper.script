@@ -1911,12 +1911,18 @@ IMPORTANT:
         // Generate unique plan ID
         const planId = `plan_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+        // Extract contentLinkSelector from sibling results
+        const contentLinkSelector = siblingResults.length > 0
+            ? siblingResults.find((r: any) => r.metadata?.contentLinkSelector)?.metadata?.contentLinkSelector
+            : undefined;
+
         // Create the scraping plan
         const scrapingPlan: ScrapingPlan = {
             planId,
             version: 1,
             entryUrls: [url], // Main page URL
             listSelector: listSelector || "article, .item, .post, .entry", // Fallback if no selector found
+            contentLinkSelector: contentLinkSelector, // NEW: Store content link selector for precise link extraction
             detailSelectors: {
                 // Use selectors from content analysis, with fallbacks
                 title: detailSelectors.title || "h1, h2, .title, .headline",
@@ -2030,6 +2036,7 @@ This scraping plan was generated using workflow analysis combining sibling link 
 ## Plan Configuration
 - **Entry URLs**: ${plan.entryUrls.join(", ")}
 - **List Selector**: \`${plan.listSelector}\`
+- **Content Link Selector**: ${plan.contentLinkSelector ? `\`${plan.contentLinkSelector}\`` : "None (will use fallback method)"}
 - **Pagination Selector**: ${plan.paginationSelector ? `\`${plan.paginationSelector}\`` : "None"}
 - **Rate Limit**: ${plan.rateLimitMs}ms between requests
 ${cookieConsentSection}

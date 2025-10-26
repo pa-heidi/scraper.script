@@ -1112,30 +1112,97 @@ export class PlaywrightExecutor {
         `🎯 Processing ${itemsToProcess.length} items for URL extraction (${maxUrls ? 'limited by maxUrls' : 'all items'})`
       );
 
-      for (let i = 0; i < itemsToProcess.length; i++) {
-        const listItem = itemsToProcess[i];
+      // Use contentLinkSelector if available for precise link extraction
+      if (plan.contentLinkSelector) {
+        logger.info(`🎯 Using content link selector for precise extraction: ${plan.contentLinkSelector}`);
+
         try {
-          // Look for links within the list item
-          const linkElement = await listItem.$('a[href]');
-          if (linkElement) {
-            const href = await linkElement.getAttribute('href');
-            if (href) {
-              // Convert relative URLs to absolute
-              const absoluteUrl = new URL(href, page.url()).href;
-              contentUrls.push(absoluteUrl);
-              logger.debug(`   📎 Found content URL ${i + 1}: ${absoluteUrl}`);
+          // Use the specific content link selector to get all content links at once
+          const contentLinks = await page.$$(plan.contentLinkSelector);
+          logger.info(`📋 Found ${contentLinks.length} content links using contentLinkSelector`);
+
+          const linksToProcess = maxUrls ? contentLinks.slice(0, maxUrls) : contentLinks;
+
+          for (let i = 0; i < linksToProcess.length; i++) {
+            const linkElement = linksToProcess[i];
+            try {
+              const href = await linkElement.getAttribute('href');
+              if (href) {
+                // Convert relative URLs to absolute
+                const absoluteUrl = new URL(href, page.url()).href;
+
+                // Filter out obvious pagination and auxiliary links
+                if (this.isContentLink(absoluteUrl, await linkElement.textContent())) {
+                  // Check if this URL is already in our list (avoid duplicates)
+                  if (!contentUrls.includes(absoluteUrl)) {
+                    contentUrls.push(absoluteUrl);
+                    logger.debug(`   📎 Found unique content URL ${contentUrls.length}: ${absoluteUrl}`);
+                  } else {
+                    logger.debug(`   🔄 Skipped duplicate URL: ${absoluteUrl}`);
+                  }
+                } else {
+                  logger.debug(`   🚫 Filtered out non-content link: ${absoluteUrl}`);
+                }
+              }
+            } catch (error) {
+              logger.warn(`   ⚠️  Error extracting URL from content link ${i + 1}:`, error);
             }
           }
         } catch (error) {
-          logger.warn(`   ⚠️  Error extracting URL from item ${i + 1}:`, error);
+          logger.warn(`⚠️  Content link selector failed, falling back to list item approach:`, error);
+          // Fall back to the original approach if contentLinkSelector fails
+          await this.extractUrlsFromListItems(itemsToProcess, contentUrls, page);
         }
+      } else {
+        logger.info(`📋 No content link selector available, using list item approach`);
+        // Use the original approach when no contentLinkSelector is available
+        await this.extractUrlsFromListItems(itemsToProcess, contentUrls, page);
       }
     } catch (error) {
       logger.error('❌ Error extracting content URLs from page:', error);
     }
 
-    logger.info(`📦 URL extraction complete: ${contentUrls.length} content URLs found`);
+    logger.info(`📦 URL extraction complete: ${contentUrls.length} unique content URLs found`);
     return contentUrls;
+  }
+
+  /**
+   * Extract URLs from list items (fallback method)
+   */
+  private async extractUrlsFromListItems(
+    itemsToProcess: any[],
+    contentUrls: string[],
+    page: Page
+  ): Promise<void> {
+    for (let i = 0; i < itemsToProcess.length; i++) {
+      const listItem = itemsToProcess[i];
+      try {
+        // Look for the first link within the list item (usually the main content link)
+        const linkElement = await listItem.$('a[href]');
+        if (linkElement) {
+          const href = await linkElement.getAttribute('href');
+          if (href) {
+            // Convert relative URLs to absolute
+            const absoluteUrl = new URL(href, page.url()).href;
+
+            // Filter out obvious pagination and auxiliary links
+            if (this.isContentLink(absoluteUrl, await linkElement.textContent())) {
+              // Check if this URL is already in our list (avoid duplicates)
+              if (!contentUrls.includes(absoluteUrl)) {
+                contentUrls.push(absoluteUrl);
+                logger.debug(`   📎 Found unique content URL ${contentUrls.length}: ${absoluteUrl}`);
+              } else {
+                logger.debug(`   🔄 Skipped duplicate URL: ${absoluteUrl}`);
+              }
+            } else {
+              logger.debug(`   🚫 Filtered out non-content link: ${absoluteUrl}`);
+            }
+          }
+        }
+      } catch (error) {
+        logger.warn(`   ⚠️  Error extracting URL from item ${i + 1}:`, error);
+      }
+    }
   }
 
   /**
@@ -1252,6 +1319,96 @@ export class PlaywrightExecutor {
       logger.error(`Error extracting data from content page ${contentUrl}:`, error);
       return null;
     }
+  }
+
+  /**
+   * Check if a link is likely a content link (not pagination or auxiliary)
+   */
+  private isContentLink(href: string, linkText: string | null): boolean {
+    // Skip common non-content patterns in URL
+    const nonContentUrlPatterns = [
+      '/page/',
+      '/seite/',
+      '?page=',
+      '&page=',
+      '/next',
+      '/prev',
+      '/previous',
+      '/weiter',
+      '/zurück',
+      '/back',
+      'javascript:',
+      '#',
+      '/search',
+      '/suche',
+      '/filter',
+      '/sort',
+      '/login',
+      '/register',
+      '/contact',
+      '/kontakt',
+      '/imprint',
+      '/impressum',
+      '/privacy',
+      '/datenschutz',
+      '/share',
+      '/teilen',
+      '/print',
+      '/drucken',
+      '/edit',
+      '/bearbeiten',
+      '/delete',
+      '/löschen'
+    ];
+
+    // Check URL patterns
+    const lowerHref = href.toLowerCase();
+    if (nonContentUrlPatterns.some(pattern => lowerHref.includes(pattern))) {
+      return false;
+    }
+
+    // Skip common non-content link text patterns
+    if (linkText) {
+      const lowerText = linkText.toLowerCase().trim();
+      const nonContentTextPatterns = [
+        'next',
+        'previous',
+        'prev',
+        'weiter',
+        'zurück',
+        'back',
+        'mehr',
+        'more',
+        'alle',
+        'all',
+        'share',
+        'teilen',
+        'print',
+        'drucken',
+        'edit',
+        'bearbeiten',
+        'delete',
+        'löschen',
+        '>>',
+        '<<',
+        '>',
+        '<',
+        '→',
+        '←',
+        '...'
+      ];
+
+      if (nonContentTextPatterns.some(pattern => lowerText === pattern || lowerText.includes(pattern))) {
+        return false;
+      }
+
+      // Skip very short link text that's likely not content
+      if (lowerText.length < 3 && !/\d/.test(lowerText)) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   /**

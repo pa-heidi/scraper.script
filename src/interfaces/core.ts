@@ -72,6 +72,7 @@ export interface ScrapingPlan {
   version: number;
   entryUrls: string[];
   listSelector: string;
+  contentLinkSelector?: string; // NEW: Specific selector for content links within list items
   paginationSelector?: string;
   detailSelectors: Record<string, string>;
   richContentFields?: string[]; // NEW: Fields that should extract HTML content (innerHTML) instead of text

@@ -331,6 +331,9 @@ export class SiblingLinkDiscoveryService {
                                 );
 
                             extractedLinks = Array.from(new Set(selectorLinks));
+                            logger.debug(`All Extracted Links:`, {
+                                extractedLinks
+                            });
                             logger.info(
                                 `✅ Content link selector extraction: ${extractedLinks.length} valid links`
                             );
@@ -1226,48 +1229,74 @@ HTML Content:
 ${html}
 
 Find:
-1. The CSS selector for the container that holds multiple links similar to the example URL
-2. A CSS selector that can extract ALL similar content links (not individual URLs)
+1. The CSS selector for the container that holds multiple content items similar to the example URL
+2. A CSS selector that can extract the PRIMARY/MAIN link from each content item (ONE unique link per item)
 3. A CSS selector for the "next page" button/link for pagination (if any)
 
-IMPORTANT:
-- Focus on providing SELECTORS that can be used to extract content, not the actual URLs
-- The selectors should match content items that are structurally similar to the example URL
+CRITICAL REQUIREMENTS:
+- contentLinkSelector should target the MAIN/PRIMARY link of each content item (usually title link)
+- Avoid selectors that pick up multiple links per content item (image links, button links, etc.)
 - Exclude pagination, navigation, and menu links from content selectors
+- Ensure each content item contributes only ONE unique link to avoid duplicates
+- Focus on providing SELECTORS that can be used to extract content, not the actual URLs
 
 Respond with JSON:
 {
   "exampleUrlSelector": "CSS selector that would match the specific example URL link in the HTML",
-  "siblingContainerSelector": "CSS selector for the parent container holding similar links",
-  "contentLinkSelector": "CSS selector that matches ALL similar content links within the container (this is the key selector we'll use to extract sibling links)",
+  "siblingContainerSelector": "CSS selector for the parent container holding similar content items",
+  "contentLinkSelector": "CSS selector that matches the PRIMARY/MAIN link from each content item (ONE unique link per item, usually title link or main link)",
   "paginationNextSelector": "CSS selector for the 'next page' button/link (like 'Next', '>', 'Weiter', etc.) - leave empty if no pagination",
   "confidence": 0.85,
-  "reasoning": "Explanation of analysis and selector choices"
+  "reasoning": "Explanation of analysis and selector choices, especially why the contentLinkSelector targets the main link"
 }
 
 CRITICAL SELECTOR REQUIREMENTS:
 - ALL selectors MUST be valid CSS syntax (no invalid characters like #[9])
-- contentLinkSelector should select ALL similar content links, not containers
-- Use descendant selectors to target links within containers
+- contentLinkSelector should select the PRIMARY/MAIN link from each content item (ONE per item)
+- Avoid selectors that return multiple links per content item
+- Use descendant selectors to target specific links within content items
+- Ensure contentLinkSelector excludes pagination links even if they're in the same container
 
-VALID SELECTOR EXAMPLES:
-- If content links are in ".event-item" divs: use ".event-item a" for contentLinkSelector
-- If content links are in "article" tags: use "article a" or "article h2 a" for contentLinkSelector
-- If content links are in ".teaserblock_xs": use ".teaserblock_xs a" for contentLinkSelector
-- If content is in ".entries" div: use ".entries a" or ".entries .item a" for contentLinkSelector
+VALID SELECTOR EXAMPLES FOR UNIQUE CONTENT LINKS:
+- If content links are in ".event-item" divs with title links: use ".event-item h2 a" or ".event-item .title a" for contentLinkSelector
+- If content links are in "article" tags with header links: use "article header a" or "article h3 a" for contentLinkSelector
+- If content links are in ".teaserblock_xs" with specific link class: use ".teaserblock_xs .main-link" for contentLinkSelector
+- If content is in ".entries" with title links: use ".entries .item h2 a" or ".entries .title-link" for contentLinkSelector
 - For pagination: use "a[title*='next']", ".pagination .next", ".pager .next" etc.
 
+IMPORTANT SELECTOR STRATEGY:
+- Target the PRIMARY/MAIN link within each content item (usually title link or designated main link)
+- Avoid generic "a" selectors that pick up ALL links (images, buttons, etc.)
+- Exclude pagination links by being specific about content structure
+- Prefer title links, header links, or links with specific classes like .main-link, .title-link
+
 INVALID SELECTORS TO AVOID:
+- ".event-item a" (too broad - picks up image links, button links, etc.)
 - "div.entries#[9]" (invalid syntax with #[9])
 - "div:nth-child(9)" (too specific, won't work for all pages)
-- Just container names without targeting links
+- Just container names without targeting specific links
 
-The contentLinkSelector should be specific enough to get only content links, but broad enough to get all similar ones across different pages.
+The contentLinkSelector should target the MAIN/PRIMARY link of each content item to ensure uniqueness and avoid auxiliary links.
 
-Focus on finding containers with multiple similar CONTENT links, excluding pagination and navigation.
+Focus on finding containers with multiple similar CONTENT items, and identify the primary link within each item.
+
+USAGE PATTERN:
+The contentLinkSelector will be used as: container.querySelectorAll(contentLinkSelector)
+This means it should work within the siblingContainerSelector scope to find the main link of each content item.
+
+EXAMPLE ANALYSIS:
+If you see content items with structure like:
+- Container div with class "events-list" containing multiple articles
+- Each article has class "event-item" with an image, title link in h2, description, and auxiliary links
+- The main content link is in the h2 element within each article
+
+Then the selectors should be:
+- siblingContainerSelector: ".events-list" (the container holding all items)
+- contentLinkSelector: ".event-item h2 a" (gets primary link from each item, not auxiliary links)
+
 ${heuristicResult?.container ? "Validate the heuristically found container and enhance the analysis." : "Perform comprehensive search since heuristics failed."}
 `;
-
+        console.log(prompt);
         return prompt;
     }
 
@@ -1425,46 +1454,34 @@ ${heuristicResult?.container ? "Validate the heuristically found container and e
     }
 
     /**
-     * Compress HTML for LLM analysis
+     * Compress HTML for LLM analysis - simplified for container-focused processing
      */
     private compressHtmlForLLM(html: string, focused: boolean = false): string {
-        // Remove scripts, styles, comments
+        // Remove scripts, styles, comments, SVGs, and inline CSS
         let compressed = html
-            .replace(/<!--[\s\S]*?-->/g, "")
-            .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
-            .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
-            .replace(/\s+/g, " ")
-            .replace(/>\s+</g, "><")
+            .replace(/<!--[\s\S]*?-->/g, "") // Remove HTML comments
+            .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "") // Remove script tags
+            .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "") // Remove style tags
+            .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, "") // Remove SVG elements
+            .replace(/\sstyle\s*=\s*"[^"]*"/gi, "") // Remove inline style attributes
+            .replace(/\sstyle\s*=\s*'[^']*'/gi, "") // Remove inline style attributes (single quotes)
+            .replace(/\s+/g, " ") // Normalize whitespace
+            .replace(/>\s+</g, "><") // Remove whitespace between tags
             .trim();
 
-        // Focus on main content areas and remove headers/footers
-        const contentPatterns = [
-            /<main[\s\S]*?<\/main>/gi,
-            /<article[\s\S]*?<\/article>/gi,
-            /<section[\s\S]*?<\/section>/gi,
-            /<div[^>]*class[^>]*(?:content|main|list|items)[^>]*>[\s\S]*?<\/div>/gi
-        ];
-
-        let mainContent = "";
-        for (const pattern of contentPatterns) {
-            const matches = compressed.match(pattern);
-            if (matches && matches.length > 0) {
-                mainContent += matches.join("\n");
+        // Limit size for token efficiency
+        const maxLength = focused ? 8000 : 15000;
+        if (compressed.length > maxLength) {
+            // Find a good breaking point (end of a div or similar)
+            const truncateAt = compressed.lastIndexOf("</div>", maxLength);
+            if (truncateAt > maxLength * 0.8) {
+                compressed = compressed.substring(0, truncateAt + 6) + "...";
+            } else {
+                compressed = compressed.substring(0, maxLength) + "...";
             }
         }
 
-        // If no main content found, use the full compressed HTML but limit size
-        if (!mainContent) {
-            mainContent = compressed;
-        }
-
-        // Limit size for token efficiency (smaller limit for focused analysis)
-        const maxLength = focused ? 8000 : 15000;
-        if (mainContent.length > maxLength) {
-            mainContent = mainContent.substring(0, maxLength) + "...";
-        }
-
-        return mainContent;
+        return compressed;
     }
 
     /**
