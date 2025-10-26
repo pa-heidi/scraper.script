@@ -37,6 +37,12 @@ class PlanGeneratorCLI {
       console.log('🚀 Website Scraping Plan Generator');
       console.log('===================================\n');
 
+      // Initialize LLM tracking
+      const { resetLLMTrackerForNewSession } = await import('../utils/llm-tracking-integration');
+      const sessionId = `plan-generation-${Date.now()}`;
+      resetLLMTrackerForNewSession(sessionId);
+      console.log(`📊 LLM tracking initialized for session: ${sessionId}\n`);
+
       // Initialize the orchestrator
       console.log('Initializing services...');
       await this.orchestrator.initialize();
@@ -298,7 +304,12 @@ class PlanGeneratorCLI {
       // Write to file
       await fs.writeFile(filepath, markdown, 'utf8');
 
+      // Save LLM tracking data to the plan file
+      const { saveLLMTrackingToPlan } = await import('../utils/llm-tracking-integration');
+      await saveLLMTrackingToPlan(filepath);
+
       console.log(`\n📄 Plan saved to: ${filepath}`);
+      console.log(`📊 LLM tracking data included in plan file`);
     } catch (error) {
       console.error('❌ Failed to save plan to file:', error instanceof Error ? error.message : String(error));
     }

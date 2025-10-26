@@ -643,7 +643,14 @@ export class SiblingLinkDiscoveryService {
                     "You are an expert web scraping engineer. Analyze HTML structure to identify list containers and pagination elements. Respond with valid JSON only.",
                 format: "json",
                 temperature: 0.1,
-                maxTokens: 2000
+                maxTokens: 2000,
+                service: 'sibling-detection',
+                method: 'analyzeContainerStructure',
+                context: {
+                    url: exampleUrl,
+                    step: 'container-analysis',
+                    metadata: { mainPageUrl }
+                }
             };
 
             logger.info("Starting LLM container analysis...");
@@ -2512,7 +2519,13 @@ Respond with JSON only:
                 "You are an expert at analyzing HTML structure for pagination elements. Respond with valid JSON only.",
             format: "json" as const,
             temperature: 0.1,
-            maxTokens: 1000
+            maxTokens: 1000,
+            service: 'pagination-detection',
+            method: 'analyzePaginationStructure',
+            context: {
+                url: baseUrl,
+                step: 'pagination-analysis'
+            }
         };
 
         try {
@@ -2659,7 +2672,13 @@ Respond with JSON only:
                 "You are an expert at analyzing HTML pagination structures. Respond with valid JSON only.",
             format: "json" as const,
             temperature: 0.1,
-            maxTokens: 800
+            maxTokens: 800,
+            service: 'pagination-detection',
+            method: 'analyzeNextPageSelector',
+            context: {
+                url: baseUrl,
+                step: 'next-page-selector-analysis'
+            }
         };
 
         try {

@@ -1717,7 +1717,13 @@ export class MCPOrchestratorService implements MCPOrchestrator {
                     "You are an expert web scraping engineer. Analyze HTML content to identify CSS selectors for extracting structured data. Respond with valid JSON only.",
                 format: "json" as const,
                 temperature: 0.1,
-                maxTokens: 2000
+                maxTokens: 2000,
+                service: 'content-analysis',
+                method: 'analyzeContentSelectors',
+                context: {
+                    url: contentUrls[0],
+                    step: 'content-selector-analysis'
+                }
             };
 
             logger.info("Starting LLM content selector analysis...");

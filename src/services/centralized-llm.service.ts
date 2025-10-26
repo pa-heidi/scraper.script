@@ -7,6 +7,7 @@
 import OpenAI from 'openai';
 import { OllamaService, createOllamaService } from './ollamaService';
 import { logger } from '../utils/logger';
+import { getLLMTracker } from './llm-tracker.service';
 
 export interface LLMConfig {
   primaryProvider: 'openai' | 'ollama';
@@ -24,6 +25,15 @@ export interface LLMRequest {
   temperature?: number;
   format?: 'json' | 'text';
   provider?: 'openai' | 'ollama'; // Override for specific requests
+  // Tracking information
+  service?: string; // e.g., 'cookie-consent', 'sibling-detection', 'pagination-detection'
+  method?: string; // e.g., 'detectCookieDialog', 'findSiblingLinks', 'analyzePagination'
+  context?: {
+    url?: string;
+    domain?: string;
+    step?: string;
+    metadata?: Record<string, any>;
+  };
 }
 
 export interface LLMResponse {
@@ -79,33 +89,123 @@ export class CentralizedLLMService {
    */
   async generate(request: LLMRequest): Promise<LLMResponse> {
     const provider = request.provider || this.config.primaryProvider;
+    const tracker = getLLMTracker();
+
+    // Track the request
+    const requestId = tracker.trackRequest({
+      service: request.service || 'unknown',
+      method: request.method || 'generate',
+      provider,
+      model: provider === 'openai' ? this.config.openaiModel! : this.config.ollamaModel!,
+      prompt: request.prompt,
+      systemMessage: request.systemMessage,
+      maxTokens: request.maxTokens || this.config.maxTokens,
+      temperature: request.temperature || this.config.temperature,
+      format: request.format
+    });
+
+    // Add context if provided
+    if (request.context) {
+      tracker.addContext(requestId, request.context);
+    }
 
     logger.debug('LLM request initiated', {
+      requestId,
       provider,
       promptLength: request.prompt.length,
       format: request.format,
       temperature: request.temperature || this.config.temperature,
+      service: request.service,
+      method: request.method
     });
 
+    const startTime = Date.now();
+
     try {
+      let response: LLMResponse;
+
       if (provider === 'openai') {
-        return await this.generateWithOpenAI(request);
+        response = await this.generateWithOpenAI(request);
       } else {
-        return await this.generateWithOllama(request);
+        response = await this.generateWithOllama(request);
       }
+
+      // Track successful response
+      tracker.trackResponse(requestId, {
+        content: response.content,
+        tokensUsed: response.tokensUsed,
+        finishReason: response.finishReason,
+        confidence: response.confidence,
+        duration: Date.now() - startTime,
+        success: true
+      });
+
+      logger.debug('LLM response received', {
+        requestId,
+        provider: response.provider,
+        model: response.model,
+        tokensUsed: response.tokensUsed,
+        duration: Date.now() - startTime
+      });
+
+      return response;
+
     } catch (error) {
-      logger.warn(`Primary provider ${provider} failed, trying fallback`, { error });
+      // Track failed response
+      tracker.trackResponse(requestId, {
+        content: '',
+        duration: Date.now() - startTime,
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
+      logger.warn(`Primary provider ${provider} failed, trying fallback`, {
+        requestId,
+        error
+      });
 
       // Try fallback provider if configured
       if (this.config.fallbackProvider && this.config.fallbackProvider !== provider) {
         try {
+          let fallbackResponse: LLMResponse;
+
           if (this.config.fallbackProvider === 'openai') {
-            return await this.generateWithOpenAI(request);
+            fallbackResponse = await this.generateWithOpenAI(request);
           } else {
-            return await this.generateWithOllama(request);
+            fallbackResponse = await this.generateWithOllama(request);
           }
+
+          // Track successful fallback response
+          tracker.trackResponse(requestId, {
+            content: fallbackResponse.content,
+            tokensUsed: fallbackResponse.tokensUsed,
+            finishReason: fallbackResponse.finishReason,
+            confidence: fallbackResponse.confidence,
+            duration: Date.now() - startTime,
+            success: true
+          });
+
+          logger.debug('LLM fallback response received', {
+            requestId,
+            provider: fallbackResponse.provider,
+            model: fallbackResponse.model,
+            tokensUsed: fallbackResponse.tokensUsed,
+            duration: Date.now() - startTime
+          });
+
+          return fallbackResponse;
+
         } catch (fallbackError) {
+          // Track failed fallback response
+          tracker.trackResponse(requestId, {
+            content: '',
+            duration: Date.now() - startTime,
+            success: false,
+            error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+          });
+
           logger.error('Both primary and fallback providers failed', {
+            requestId,
             primaryError: error,
             fallbackError
           });

@@ -49,7 +49,6 @@ export type {
     PlanApproval,
     PlanLifecycleStatus,
     ExecutionRequest,
-    QueueMessage,
     WorkflowState,
     WorkflowStep,
     MCPOrchestratorConfig,

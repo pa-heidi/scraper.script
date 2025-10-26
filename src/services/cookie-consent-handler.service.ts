@@ -7,6 +7,8 @@
 import { Page, ElementHandle } from 'playwright';
 import { logger } from '../utils/logger';
 import { getCentralizedLLMService } from './centralized-llm.service';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 
 export interface CookieConsentConfig {
   strategy: 'accept-all' | 'reject-all' | 'minimal' | 'ai-decide';
@@ -15,6 +17,8 @@ export interface CookieConsentConfig {
   retryAttempts: number; // 3
   fallbackStrategy: 'skip' | 'fail' | 'continue';
   useAI: boolean; // Use AI for button identification
+  useLLMPrimary: boolean; // Use LLM as primary method (not just fallback)
+  useLLMVerification: boolean; // Use LLM to verify consent success
 }
 
 export interface ConsentButtons {
@@ -27,7 +31,7 @@ export interface ConsentButtons {
 
 export interface ConsentHandlingResult {
   success: boolean;
-  method: 'heuristic' | 'ai' | 'none';
+  method: 'heuristic' | 'ai' | 'llm-primary' | 'llm-fallback' | 'none';
   buttonClicked?: string;
   error?: string;
   duration: number;
@@ -35,7 +39,7 @@ export interface ConsentHandlingResult {
   // NEW: Cookie consent metadata
   metadata: {
     detected: boolean;
-    strategy: 'accept-all' | 'reject-all' | 'minimal' | 'none-detected';
+    strategy: 'accept-all' | 'reject-all' | 'minimal' | 'ai-decide' | 'none-detected';
     library?: string;
     buttonSelectors?: {
       accept?: string;
@@ -44,7 +48,39 @@ export interface ConsentHandlingResult {
       close?: string;
     };
     handledAt?: Date;
+    llmPlan?: CookieConsentLLMPlan;
+    llmVerification?: LLMVerificationResult;
   };
+}
+
+export interface LLMVerificationResult {
+  success: boolean;
+  confidence: number;
+  reasoning: string;
+  detectedElements: string[];
+  verificationMethod: 'page-analysis' | 'element-detection' | 'content-check';
+  timestamp: Date;
+}
+
+export interface CookieConsentLLMPlan {
+  url: string;
+  domain: string;
+  library: string;
+  steps: CookieConsentStep[];
+  createdAt: Date;
+  successRate?: number;
+  verificationResults?: LLMVerificationResult[];
+  lastUsed?: Date;
+  usageCount?: number;
+}
+
+export interface CookieConsentStep {
+  stepNumber: number;
+  action: 'click' | 'wait' | 'scroll' | 'select';
+  selector: string;
+  description: string;
+  waitTime?: number;
+  fallbackSelectors?: string[];
 }
 
 export class CookieConsentHandler {
@@ -58,6 +94,8 @@ export class CookieConsentHandler {
       retryAttempts: 3,
       fallbackStrategy: 'continue',
       useAI: process.env.COOKIE_CONSENT_USE_AI === 'true',
+      useLLMPrimary: process.env.COOKIE_CONSENT_USE_LLM_PRIMARY !== 'false', // Default to true
+      useLLMVerification: process.env.COOKIE_CONSENT_USE_LLM_VERIFICATION !== 'false', // Default to true
       ...config,
     };
   }
@@ -116,80 +154,135 @@ export class CookieConsentHandler {
         logger.debug(`Detected cookie consent library: ${library}`);
       }
 
-      // Identify consent buttons
-      let buttons: ConsentButtons = {};
+      // Choose handling method based on configuration
+      let result: ConsentHandlingResult;
 
-      if (finalConfig.useAI) {
-        try {
-          buttons = await this.identifyButtonsWithAI(page, dialogElement);
-          logger.debug(`AI identified ${Object.keys(buttons).length} consent buttons`);
-        } catch (error) {
-          logger.warn(`AI button identification failed, falling back to heuristics:`, error);
+      if (finalConfig.useLLMPrimary) {
+        logger.info('🤖 Using LLM as primary method for cookie consent handling...');
+        result = await this.handleWithLLMPrimary(page, url, library, finalConfig);
+      } else {
+        // Use traditional methods (heuristic/AI)
+        let buttons: ConsentButtons = {};
+
+        if (finalConfig.useAI) {
+          try {
+            buttons = await this.identifyButtonsWithAI(page, dialogElement);
+            logger.debug(`AI identified ${Object.keys(buttons).length} consent buttons`);
+          } catch (error) {
+            logger.warn(`AI button identification failed, falling back to heuristics:`, error);
+            buttons = await this.identifyButtonsWithHeuristics(page, dialogElement);
+          }
+        } else {
           buttons = await this.identifyButtonsWithHeuristics(page, dialogElement);
         }
-      } else {
-        buttons = await this.identifyButtonsWithHeuristics(page, dialogElement);
-      }
 
-      // Click the appropriate button based on strategy
-      const clickResult = await this.clickConsentButton(page, buttons, finalConfig.strategy);
-      if (!clickResult.success) {
-        return {
-          success: false,
-          method: finalConfig.useAI ? 'ai' : 'heuristic',
-          error: clickResult.error,
-          duration: Date.now() - startTime,
-          library,
-          metadata: {
-            detected: true,
-            strategy: finalConfig.strategy as any,
-            library,
-            buttonSelectors: {
-              accept: buttons.acceptAll?.selector,
-              reject: buttons.rejectAll?.selector,
-              save: buttons.save?.selector,
-              close: buttons.close?.selector
-            },
-            handledAt: new Date()
+        // Click the appropriate button based on strategy
+        const clickResult = await this.clickConsentButton(page, buttons, finalConfig.strategy);
+        if (!clickResult.success) {
+          logger.warn(`Standard cookie consent handling failed: ${clickResult.error}`);
+
+          // Try LLM-based fallback
+          logger.info('🤖 Attempting LLM-based cookie consent fallback...');
+          const llmResult = await this.handleWithLLMFallback(page, url, library);
+
+          if (llmResult.success) {
+            logger.info('✅ LLM fallback successfully handled cookie consent');
+            result = {
+              success: true,
+              method: 'llm-fallback',
+              buttonClicked: llmResult.buttonClicked,
+              duration: Date.now() - startTime,
+              library,
+              metadata: {
+                detected: true,
+                strategy: finalConfig.strategy as any,
+                library,
+                buttonSelectors: {
+                  accept: buttons.acceptAll?.selector,
+                  reject: buttons.rejectAll?.selector,
+                  save: buttons.save?.selector,
+                  close: buttons.close?.selector
+                },
+                handledAt: new Date(),
+                llmPlan: llmResult.llmPlan
+              }
+            };
+          } else {
+            result = {
+              success: false,
+              method: finalConfig.useAI ? 'ai' : 'heuristic',
+              error: clickResult.error,
+              duration: Date.now() - startTime,
+              library,
+              metadata: {
+                detected: true,
+                strategy: finalConfig.strategy as any,
+                library,
+                buttonSelectors: {
+                  accept: buttons.acceptAll?.selector,
+                  reject: buttons.rejectAll?.selector,
+                  save: buttons.save?.selector,
+                  close: buttons.close?.selector
+                },
+                handledAt: new Date()
+              }
+            };
           }
-        };
+        } else {
+          result = {
+            success: true,
+            method: finalConfig.useAI ? 'ai' : 'heuristic',
+            buttonClicked: clickResult.buttonClicked,
+            duration: Date.now() - startTime,
+            library,
+            metadata: {
+              detected: true,
+              strategy: finalConfig.strategy as any,
+              library,
+              buttonSelectors: {
+                accept: buttons.acceptAll?.selector,
+                reject: buttons.rejectAll?.selector,
+                save: buttons.save?.selector,
+                close: buttons.close?.selector
+              },
+              handledAt: new Date()
+            }
+          };
+        }
       }
 
-      // Verify dialog was dismissed
-      const dismissed = await this.verifyDialogDismissed(page);
-      if (!dismissed) {
-        logger.warn(`Cookie consent button clicked but dialog may not have been dismissed on ${url}`);
+      // Add LLM verification if enabled
+      if (finalConfig.useLLMVerification && result.success) {
+        logger.info('🔍 Performing LLM verification of cookie consent success...');
+        const verification = await this.verifyConsentWithLLM(page, url, library);
+        result.metadata.llmVerification = verification;
+
+        if (!verification.success) {
+          logger.warn('⚠️ LLM verification indicates cookie consent may not have been successful');
+          result.success = false;
+          result.error = `LLM verification failed: ${verification.reasoning}`;
+        } else {
+          logger.info(`✅ LLM verification successful (confidence: ${verification.confidence}%)`);
+        }
+
+        // Save verification results to plan if available
+        if (result.metadata.llmPlan) {
+          await this.saveCookieConsentPlan(result.metadata.llmPlan, verification);
+        }
       }
 
       // Capture debug screenshot after handling
       await this.captureDebugScreenshot(page, 'after-handling');
 
-      logger.info(`✅ Successfully handled cookie consent on ${url}`, {
-        method: finalConfig.useAI ? 'ai' : 'heuristic',
-        buttonClicked: clickResult.buttonClicked,
+      logger.info(`✅ Cookie consent handling completed on ${url}`, {
+        method: result.method,
+        buttonClicked: result.buttonClicked,
         library,
-        duration: `${Date.now() - startTime}ms`,
+        duration: `${result.duration}ms`,
+        llmVerified: !!result.metadata.llmVerification
       });
 
-      return {
-        success: true,
-        method: finalConfig.useAI ? 'ai' : 'heuristic',
-        buttonClicked: clickResult.buttonClicked,
-        duration: Date.now() - startTime,
-        library,
-        metadata: {
-          detected: true,
-          strategy: finalConfig.strategy as any,
-          library,
-          buttonSelectors: {
-            accept: buttons.acceptAll?.selector,
-            reject: buttons.rejectAll?.selector,
-            save: buttons.save?.selector,
-            close: buttons.close?.selector
-          },
-          handledAt: new Date()
-        }
-      };
+      return result;
 
     } catch (error) {
       logger.error(`❌ Error handling cookie consent on ${url}:`, error);
@@ -647,7 +740,13 @@ Focus on buttons that handle cookie consent.
         systemMessage: "You are an expert at identifying cookie consent buttons. Analyze the HTML and return valid JSON with button selectors.",
         format: "json" as const,
         temperature: 0.1,
-        maxTokens: 1000
+        maxTokens: 1000,
+        service: 'cookie-consent',
+        method: 'identifyButtonsWithAI',
+        context: {
+          url: page.url(),
+          step: 'button-identification'
+        }
       });
 
       if (!response || !response.content) {
@@ -1019,6 +1118,662 @@ Focus on buttons that handle cookie consent.
       } catch (error) {
         logger.debug(`Failed to capture debug screenshot:`, error);
       }
+    }
+  }
+
+  /**
+   * Handle cookie consent using LLM as primary method
+   */
+  private async handleWithLLMPrimary(
+    page: Page,
+    url: string,
+    library?: string,
+    config?: Partial<CookieConsentConfig>
+  ): Promise<ConsentHandlingResult> {
+    const startTime = Date.now();
+
+    try {
+      const domain = new URL(url).hostname;
+
+      // Check if we have a saved plan for this domain/library combination
+      const existingPlan = await this.loadCookieConsentPlan(domain, library);
+      if (existingPlan) {
+        logger.info(`📋 Using existing LLM plan for ${domain} (${library || 'unknown library'})`);
+        const result = await this.executeLLMPlan(page, existingPlan);
+        if (result.success) {
+          return {
+            success: true,
+            method: 'llm-primary',
+            buttonClicked: result.buttonClicked,
+            duration: Date.now() - startTime,
+            library,
+            metadata: {
+              detected: true,
+              strategy: config?.strategy || 'accept-all',
+              library,
+              handledAt: new Date(),
+              llmPlan: existingPlan
+            }
+          };
+        }
+      }
+
+      // Generate new LLM plan
+      logger.info(`🤖 Generating new LLM plan for ${domain} (${library || 'unknown library'})`);
+      const newPlan = await this.generateLLMPlan(page, url, library);
+      if (!newPlan) {
+        return {
+          success: false,
+          method: 'llm-primary',
+          error: 'Failed to generate LLM plan',
+          duration: Date.now() - startTime,
+          library,
+          metadata: {
+            detected: true,
+            strategy: config?.strategy || 'accept-all',
+            library,
+            handledAt: new Date()
+          }
+        };
+      }
+
+      // Execute the new plan
+      const result = await this.executeLLMPlan(page, newPlan);
+      if (result.success) {
+        // Save the successful plan for future use (verification will be added later if enabled)
+        await this.saveCookieConsentPlan(newPlan);
+        return {
+          success: true,
+          method: 'llm-primary',
+          buttonClicked: result.buttonClicked,
+          duration: Date.now() - startTime,
+          library,
+          metadata: {
+            detected: true,
+            strategy: config?.strategy || 'accept-all',
+            library,
+            handledAt: new Date(),
+            llmPlan: newPlan
+          }
+        };
+      }
+
+      return {
+        success: false,
+        method: 'llm-primary',
+        error: 'LLM plan execution failed',
+        duration: Date.now() - startTime,
+        library,
+        metadata: {
+          detected: true,
+          strategy: config?.strategy || 'accept-all',
+          library,
+          handledAt: new Date()
+        }
+      };
+
+    } catch (error) {
+      logger.error('LLM primary handling failed:', error);
+      return {
+        success: false,
+        method: 'llm-primary',
+        error: error instanceof Error ? error.message : String(error),
+        duration: Date.now() - startTime,
+        library,
+        metadata: {
+          detected: true,
+          strategy: config?.strategy || 'accept-all',
+          library,
+          handledAt: new Date()
+        }
+      };
+    }
+  }
+
+  /**
+   * Verify cookie consent success using LLM analysis
+   */
+  private async verifyConsentWithLLM(
+    page: Page,
+    url: string,
+    library?: string
+  ): Promise<LLMVerificationResult> {
+    try {
+      const domain = new URL(url).hostname;
+
+      // First, use heuristic search to find cookie dialog elements
+      const cookieDialogSelectors = [
+        '[class*="cookie"]', '[id*="cookie"]', '[class*="consent"]',
+        '[class*="disclaimer"]', '[role="dialog"]', '.cookie-banner',
+        '.consent-banner', '.cookie-notice'
+      ];
+
+      let remainingElements: string[] = [];
+      let dialogHTML = '';
+      let foundDialog = false;
+
+      // Use heuristic search to find cookie dialog
+      for (const selector of cookieDialogSelectors) {
+        try {
+          const elements = await page.$$(selector);
+          for (const element of elements) {
+            const isVisible = await element.isVisible();
+            if (isVisible) {
+              const text = await element.textContent();
+              if (text && this.containsCookieKeywords(text)) {
+                remainingElements.push(`${selector}: "${text.substring(0, 100)}..."`);
+
+                // Get the HTML of this specific dialog element
+                if (!foundDialog) {
+                  dialogHTML = await element.innerHTML();
+                  foundDialog = true;
+                }
+              }
+            }
+          }
+        } catch (error) {
+          // Continue with next selector
+        }
+      }
+
+      // If no dialog found, verification is successful
+      if (!foundDialog && remainingElements.length === 0) {
+        return {
+          success: true,
+          confidence: 95,
+          reasoning: 'No cookie consent dialog elements detected - consent likely successful',
+          detectedElements: [],
+          verificationMethod: 'element-detection',
+          timestamp: new Date()
+        };
+      }
+
+      // Pass only the relevant cookie dialog HTML to LLM for analysis
+      const prompt = `
+Analyze this cookie consent dialog HTML to determine if consent was successfully handled. This is a German website (${domain}) using ${library || 'unknown'} cookie consent library.
+
+URL: ${url}
+
+Cookie Dialog HTML (only the dialog element, not the whole page):
+${dialogHTML}
+
+Remaining Cookie Dialog Elements Found:
+${remainingElements.length > 0 ? remainingElements.join('\n') : 'None detected'}
+
+Determine if cookie consent was successfully handled based on:
+1. Dialog state indicates consent was given/accepted
+2. Dialog appears to be dismissed or closed
+3. No blocking elements remain
+4. Dialog content shows success state
+
+Return JSON with this exact structure:
+{
+  "success": true|false,
+  "confidence": 0-100,
+  "reasoning": "Detailed explanation of your analysis",
+  "detectedElements": ["list", "of", "elements", "found"],
+  "verificationMethod": "element-detection"
+}
+
+Important:
+- Analyze only the cookie dialog HTML provided
+- Look for success indicators in the dialog content
+- Consider German cookie consent patterns
+- Be conservative in your assessment
+- Confidence should reflect certainty level
+`;
+
+      const llmService = getCentralizedLLMService();
+      const response = await llmService.generate({
+        prompt,
+        systemMessage: "You are an expert at analyzing cookie consent dialogs. Focus on the dialog HTML provided and determine if consent was successfully handled.",
+        format: "json" as const,
+        temperature: 0.1,
+        maxTokens: 1000,
+        service: 'cookie-consent',
+        method: 'verifyConsentWithLLM',
+        context: {
+          url,
+          domain,
+          step: 'verification'
+        }
+      });
+
+      if (!response || !response.content) {
+        throw new Error('No response from LLM');
+      }
+
+      const verificationData = JSON.parse(response.content);
+
+      const verification: LLMVerificationResult = {
+        success: verificationData.success || false,
+        confidence: verificationData.confidence || 0,
+        reasoning: verificationData.reasoning || 'No reasoning provided',
+        detectedElements: verificationData.detectedElements || remainingElements,
+        verificationMethod: 'element-detection',
+        timestamp: new Date()
+      };
+
+      logger.debug(`LLM verification result: ${verification.success} (${verification.confidence}% confidence)`);
+      return verification;
+
+    } catch (error) {
+      logger.error('LLM verification failed:', error);
+      return {
+        success: false,
+        confidence: 0,
+        reasoning: `Verification failed: ${error instanceof Error ? error.message : String(error)}`,
+        detectedElements: [],
+        verificationMethod: 'element-detection',
+        timestamp: new Date()
+      };
+    }
+  }
+
+  /**
+   * Handle cookie consent using LLM-based fallback when standard methods fail
+   */
+  private async handleWithLLMFallback(
+    page: Page,
+    url: string,
+    library?: string
+  ): Promise<{ success: boolean; buttonClicked?: string; llmPlan?: CookieConsentLLMPlan; error?: string }> {
+    try {
+      const domain = new URL(url).hostname;
+
+      // Check if we have a saved plan for this domain/library combination
+      const existingPlan = await this.loadCookieConsentPlan(domain, library);
+      if (existingPlan) {
+        logger.info(`📋 Using existing LLM plan for ${domain} (${library || 'unknown library'})`);
+        const result = await this.executeLLMPlan(page, existingPlan);
+        if (result.success) {
+          return { success: true, buttonClicked: result.buttonClicked, llmPlan: existingPlan };
+        }
+      }
+
+      // Generate new LLM plan
+      logger.info(`🤖 Generating new LLM plan for ${domain} (${library || 'unknown library'})`);
+      const newPlan = await this.generateLLMPlan(page, url, library);
+      if (!newPlan) {
+        return { success: false, error: 'Failed to generate LLM plan' };
+      }
+
+      // Execute the new plan
+      const result = await this.executeLLMPlan(page, newPlan);
+      if (result.success) {
+        // Save the successful plan for future use
+        await this.saveCookieConsentPlan(newPlan);
+        return { success: true, buttonClicked: result.buttonClicked, llmPlan: newPlan };
+      }
+
+      return { success: false, error: 'LLM plan execution failed' };
+
+    } catch (error) {
+      logger.error('LLM fallback failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  /**
+   * Generate a cookie consent plan using LLM analysis
+   */
+  private async generateLLMPlan(
+    page: Page,
+    url: string,
+    library?: string
+  ): Promise<CookieConsentLLMPlan | null> {
+    try {
+      const domain = new URL(url).hostname;
+
+      // First, use heuristic search to find cookie dialog and buttons
+      const dialogElement = await this.getCookieDialogElement(page);
+      if (!dialogElement) {
+        logger.warn('No cookie dialog element found for LLM plan generation');
+        return null;
+      }
+
+      // Get the HTML of the specific dialog element (not the whole page)
+      const dialogHTML = await dialogElement.innerHTML();
+
+      // Use heuristic search to find buttons within the dialog
+      const buttons = await this.identifyButtonsWithHeuristics(page, dialogElement);
+
+      // Create button information for LLM
+      const buttonInfo = Object.entries(buttons).map(([type, button]) =>
+        `${type}: "${button?.text}" (${button?.selector})`
+      ).join('\n');
+
+      const prompt = `
+Analyze this cookie consent dialog HTML and create a step-by-step plan to handle it. This is a German website (${domain}) using ${library || 'unknown'} cookie consent library.
+
+URL: ${url}
+
+Cookie Dialog HTML (only the dialog element, not the whole page):
+${dialogHTML}
+
+Buttons Found by Heuristic Search:
+${buttonInfo}
+
+Create a detailed plan with specific steps to:
+1. Accept all cookies (preferred) or reject all cookies (fallback)
+2. Handle any multi-step processes
+3. Ensure the dialog is completely dismissed
+
+Use the buttons found by heuristic search as the primary selectors, but provide fallback selectors.
+
+Return JSON with this exact structure:
+{
+  "steps": [
+    {
+      "stepNumber": 1,
+      "action": "click|wait|scroll|select",
+      "selector": "CSS_SELECTOR_HERE",
+      "description": "What this step does",
+      "waitTime": 1000,
+      "fallbackSelectors": ["alternative_selector1", "alternative_selector2"]
+    }
+  ],
+  "strategy": "accept-all|reject-all",
+  "notes": "Additional observations about this cookie dialog"
+}
+
+Important:
+- Use the heuristic-found button selectors as primary selectors
+- Include fallback selectors for each step
+- Add appropriate wait times between steps
+- Focus on German button text patterns
+- Handle multi-step consent flows properly
+- Ensure selectors are robust and specific
+`;
+
+      const llmService = getCentralizedLLMService();
+      const response = await llmService.generate({
+        prompt,
+        systemMessage: "You are an expert at analyzing cookie consent dialogs and creating automated handling plans. Use the heuristic-found buttons as primary selectors and provide fallback options.",
+        format: "json" as const,
+        temperature: 0.1,
+        maxTokens: 2000,
+        service: 'cookie-consent',
+        method: 'generateLLMPlan',
+        context: {
+          url,
+          domain,
+          step: 'plan-generation',
+          metadata: { library }
+        }
+      });
+
+      if (!response || !response.content) {
+        throw new Error('No response from LLM');
+      }
+
+      const planData = JSON.parse(response.content);
+
+      const plan: CookieConsentLLMPlan = {
+        url,
+        domain,
+        library: library || 'unknown',
+        steps: planData.steps.map((step: any, index: number) => ({
+          stepNumber: step.stepNumber || index + 1,
+          action: step.action || 'click',
+          selector: step.selector,
+          description: step.description || `Step ${index + 1}`,
+          waitTime: step.waitTime || 1000,
+          fallbackSelectors: step.fallbackSelectors || []
+        })),
+        createdAt: new Date(),
+        successRate: 0
+      };
+
+      logger.info(`🤖 Generated LLM plan with ${plan.steps.length} steps for ${domain} (using heuristic-found buttons)`);
+      return plan;
+
+    } catch (error) {
+      logger.error('Failed to generate LLM plan:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Execute a cookie consent plan
+   */
+  private async executeLLMPlan(
+    page: Page,
+    plan: CookieConsentLLMPlan
+  ): Promise<{ success: boolean; buttonClicked?: string; error?: string }> {
+    try {
+      let clickedButtons: string[] = [];
+
+      for (const step of plan.steps) {
+        logger.debug(`Executing step ${step.stepNumber}: ${step.description}`);
+
+        try {
+          switch (step.action) {
+            case 'click':
+              const clickResult = await this.executeClickStep(page, step);
+              if (clickResult.success && clickResult.buttonText) {
+                clickedButtons.push(clickResult.buttonText);
+              }
+              break;
+            case 'wait':
+              await page.waitForTimeout(step.waitTime || 1000);
+              break;
+            case 'scroll':
+              await page.evaluate((selector) => {
+                const element = document.querySelector(selector);
+                if (element) {
+                  element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+              }, step.selector);
+              break;
+            case 'select':
+              // Handle dropdown/checkbox selection if needed
+              await page.selectOption(step.selector, { value: 'all' });
+              break;
+          }
+
+          // Wait after each step
+          if (step.waitTime) {
+            await page.waitForTimeout(step.waitTime);
+          }
+
+        } catch (stepError) {
+          logger.warn(`Step ${step.stepNumber} failed:`, stepError);
+          // Continue with next step
+        }
+      }
+
+      // Verify dialog was dismissed
+      const dismissed = await this.verifyDialogDismissed(page);
+      if (!dismissed) {
+        logger.warn('LLM plan executed but dialog may not be fully dismissed');
+      }
+
+      return {
+        success: true,
+        buttonClicked: clickedButtons.join(' + ')
+      };
+
+    } catch (error) {
+      logger.error('LLM plan execution failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  /**
+   * Execute a click step with fallback selectors
+   */
+  private async executeClickStep(
+    page: Page,
+    step: CookieConsentStep
+  ): Promise<{ success: boolean; buttonText?: string; error?: string }> {
+    const selectors = [step.selector, ...(step.fallbackSelectors || [])];
+
+    for (const selector of selectors) {
+      try {
+        // Wait for element to exist
+        await page.waitForSelector(selector, {
+          state: 'attached',
+          timeout: 3000
+        });
+
+        // Scroll into view
+        await page.evaluate((sel) => {
+          const element = document.querySelector(sel);
+          if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, selector);
+
+        // Wait for visibility
+        await page.waitForTimeout(500);
+
+        // Try to click
+        const element = await page.$(selector);
+        if (element) {
+          const isVisible = await element.isVisible();
+          const isEnabled = await element.isEnabled();
+
+          if (isVisible && isEnabled) {
+            await element.click();
+          } else {
+            // JavaScript click fallback
+            await page.evaluate((sel) => {
+              const element = document.querySelector(sel) as HTMLElement;
+              if (element) {
+                element.click();
+              }
+            }, selector);
+          }
+
+          // Get button text for logging
+          const buttonText = await element.textContent() || selector;
+
+          logger.debug(`Successfully clicked: ${buttonText}`);
+          return { success: true, buttonText };
+        }
+
+      } catch (error) {
+        logger.debug(`Selector ${selector} failed:`, error);
+        continue; // Try next selector
+      }
+    }
+
+    return { success: false, error: 'All selectors failed' };
+  }
+
+  /**
+   * Save a cookie consent plan to disk
+   */
+  private async saveCookieConsentPlan(plan: CookieConsentLLMPlan, verificationResult?: LLMVerificationResult): Promise<void> {
+    try {
+      const plansDir = path.join(process.cwd(), 'plans', 'cookie-consent');
+      await fs.mkdir(plansDir, { recursive: true });
+
+      // Check if plan already exists and update it
+      const existingPlan = await this.loadCookieConsentPlan(plan.domain, plan.library);
+      if (existingPlan) {
+        // Update existing plan with verification results and usage stats
+        existingPlan.lastUsed = new Date();
+        existingPlan.usageCount = (existingPlan.usageCount || 0) + 1;
+
+        if (verificationResult) {
+          if (!existingPlan.verificationResults) {
+            existingPlan.verificationResults = [];
+          }
+          existingPlan.verificationResults.push(verificationResult);
+
+          // Calculate success rate based on verification results
+          const successfulVerifications = existingPlan.verificationResults.filter(v => v.success).length;
+          existingPlan.successRate = Math.round((successfulVerifications / existingPlan.verificationResults.length) * 100);
+        }
+
+        // Save updated plan
+        const createdAtTime = existingPlan.createdAt instanceof Date ? existingPlan.createdAt.getTime() : new Date(existingPlan.createdAt).getTime();
+        const filename = `cookie-consent-plan-${existingPlan.domain}-${existingPlan.library}-${createdAtTime}.json`;
+        const filepath = path.join(plansDir, filename);
+        await fs.writeFile(filepath, JSON.stringify(existingPlan, null, 2));
+        logger.info(`💾 Updated cookie consent plan: ${filename} (usage: ${existingPlan.usageCount}, success rate: ${existingPlan.successRate}%)`);
+      } else {
+        // Create new plan
+        plan.lastUsed = new Date();
+        plan.usageCount = 1;
+
+        if (verificationResult) {
+          plan.verificationResults = [verificationResult];
+          plan.successRate = verificationResult.success ? 100 : 0;
+        }
+
+        const filename = `cookie-consent-plan-${plan.domain}-${plan.library}-${Date.now()}.json`;
+        const filepath = path.join(plansDir, filename);
+        await fs.writeFile(filepath, JSON.stringify(plan, null, 2));
+        logger.info(`💾 Saved new cookie consent plan: ${filename}`);
+      }
+    } catch (error) {
+      logger.error('Failed to save cookie consent plan:', error);
+    }
+  }
+
+  /**
+   * Load a cookie consent plan from disk
+   */
+  private async loadCookieConsentPlan(
+    domain: string,
+    library?: string
+  ): Promise<CookieConsentLLMPlan | null> {
+    try {
+      const plansDir = path.join(process.cwd(), 'plans', 'cookie-consent');
+
+      try {
+        const files = await fs.readdir(plansDir);
+        const cookieConsentFiles = files.filter(file =>
+          file.startsWith('cookie-consent-plan-') &&
+          file.includes(domain) &&
+          (!library || file.includes(library))
+        );
+
+        if (cookieConsentFiles.length === 0) {
+          return null;
+        }
+
+        // Get the most recent plan
+        const latestFile = cookieConsentFiles.sort().pop();
+        if (!latestFile) {
+          return null;
+        }
+
+        const filepath = path.join(plansDir, latestFile);
+        const content = await fs.readFile(filepath, 'utf-8');
+        const planData = JSON.parse(content);
+
+        // Convert date strings back to Date objects
+        const plan: CookieConsentLLMPlan = {
+          ...planData,
+          createdAt: new Date(planData.createdAt),
+          lastUsed: planData.lastUsed ? new Date(planData.lastUsed) : undefined,
+          verificationResults: planData.verificationResults?.map((vr: any) => ({
+            ...vr,
+            timestamp: new Date(vr.timestamp)
+          })) || []
+        };
+
+        logger.debug(`📋 Loaded cookie consent plan for ${domain} from ${latestFile}`);
+        return plan;
+
+      } catch (dirError) {
+        // Directory doesn't exist yet
+        return null;
+      }
+
+    } catch (error) {
+      logger.error('Failed to load cookie consent plan:', error);
+      return null;
     }
   }
 }
