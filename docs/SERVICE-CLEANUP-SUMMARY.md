@@ -35,11 +35,12 @@ Removed unused services and cleaned up their references to make the project more
   - `buildContentSelectorPrompt()`
   - `parseLLMContentResponse()`
   - `trimHtmlToMainContent()`
+- Replaced complex LLM analysis with simple heuristic-based selectors
 
 ### CookieConsentHandler
 - Removed LLMPlannerService dependency
-- Disabled AI button identification (falls back to heuristics)
-- Updated `identifyButtonsWithAI()` to use heuristic fallback
+- Replaced with centralized LLM service for AI functionality
+- Updated `identifyButtonsWithAI()` to use centralized LLM service
 
 ### Services Index (`index.ts`)
 - Removed exports for deleted services
