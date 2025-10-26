@@ -6,7 +6,7 @@
 
 import { Page, ElementHandle } from 'playwright';
 import { logger } from '../utils/logger';
-import { LLMPlannerService } from './llm-planner.service';
+import { getCentralizedLLMService } from './centralized-llm.service';
 
 export interface CookieConsentConfig {
   strategy: 'accept-all' | 'reject-all' | 'minimal' | 'ai-decide';
@@ -48,11 +48,9 @@ export interface ConsentHandlingResult {
 }
 
 export class CookieConsentHandler {
-  private llmPlanner: LLMPlannerService;
   private config: CookieConsentConfig;
 
   constructor(config?: Partial<CookieConsentConfig>) {
-    this.llmPlanner = new LLMPlannerService();
     this.config = {
       strategy: (process.env.COOKIE_CONSENT_STRATEGY as any) || 'accept-all',
       languages: (process.env.COOKIE_CONSENT_LANGUAGES || 'de,en').split(','),
@@ -642,11 +640,14 @@ Only include buttons that exist. Use specific CSS selectors that can be used wit
 Focus on buttons that handle cookie consent.
 `;
 
-      // Use the LLM planner's OpenAI client
-      const response = await this.llmPlanner.callOpenAI(prompt, {
-        model: 'codeLlama:7b-code-q4_K_M',
-        maxTokens: 1000,
+      // Use the centralized LLM service
+      const llmService = getCentralizedLLMService();
+      const response = await llmService.generate({
+        prompt,
+        systemMessage: "You are an expert at identifying cookie consent buttons. Analyze the HTML and return valid JSON with button selectors.",
+        format: "json" as const,
         temperature: 0.1,
+        maxTokens: 1000
       });
 
       if (!response || !response.content) {

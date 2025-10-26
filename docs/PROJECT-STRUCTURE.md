@@ -27,19 +27,16 @@ scraper.script/
 │   │   └── core.ts                # Core type definitions
 │   ├── services/                  # Core services
 │   │   ├── centralized-llm.service.ts
-│   │   ├── content-pattern-analyzer.service.ts
 │   │   ├── cookie-consent-handler.service.ts
 │   │   ├── data-validator.service.ts
 │   │   ├── html-compressor.service.ts
 │   │   ├── legal-compliance.service.ts
 │   │   ├── llamaindex-integration.service.ts
-│   │   ├── llm-planner.service.ts
 │   │   ├── mcp-orchestrator.service.ts
 │   │   ├── ollamaService.ts
 │   │   ├── playwright-executor.service.ts
 │   │   ├── sandbox-executor.service.ts
 │   │   ├── sibling-link-discovery.service.ts
-│   │   ├── site-analysis.service.ts
 │   │   └── index.ts               # Service exports
 │   └── utils/                     # Utility functions
 │       └── logger.ts              # Logging utility
