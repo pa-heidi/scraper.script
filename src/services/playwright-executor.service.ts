@@ -1131,17 +1131,13 @@ export class PlaywrightExecutor {
                 // Convert relative URLs to absolute
                 const absoluteUrl = new URL(href, page.url()).href;
 
-                // Filter out obvious pagination and auxiliary links
-                if (this.isContentLink(absoluteUrl, await linkElement.textContent())) {
-                  // Check if this URL is already in our list (avoid duplicates)
-                  if (!contentUrls.includes(absoluteUrl)) {
-                    contentUrls.push(absoluteUrl);
-                    logger.debug(`   📎 Found unique content URL ${contentUrls.length}: ${absoluteUrl}`);
-                  } else {
-                    logger.debug(`   🔄 Skipped duplicate URL: ${absoluteUrl}`);
-                  }
+                // Trust the content link selector - if it found the link, it's likely content
+                // Only do basic validation (avoid duplicates and invalid URLs)
+                if (!contentUrls.includes(absoluteUrl)) {
+                  contentUrls.push(absoluteUrl);
+                  logger.debug(`   📎 Found unique content URL ${contentUrls.length}: ${absoluteUrl}`);
                 } else {
-                  logger.debug(`   🚫 Filtered out non-content link: ${absoluteUrl}`);
+                  logger.debug(`   🔄 Skipped duplicate URL: ${absoluteUrl}`);
                 }
               }
             } catch (error) {
@@ -1185,8 +1181,8 @@ export class PlaywrightExecutor {
             // Convert relative URLs to absolute
             const absoluteUrl = new URL(href, page.url()).href;
 
-            // Filter out obvious pagination and auxiliary links
-            if (this.isContentLink(absoluteUrl, await linkElement.textContent())) {
+            // Apply light filtering for fallback method (trust the list selector mostly)
+            if (this.isLikelyContentLink(absoluteUrl, await linkElement.textContent())) {
               // Check if this URL is already in our list (avoid duplicates)
               if (!contentUrls.includes(absoluteUrl)) {
                 contentUrls.push(absoluteUrl);
@@ -1322,7 +1318,43 @@ export class PlaywrightExecutor {
   }
 
   /**
-   * Check if a link is likely a content link (not pagination or auxiliary)
+   * Light filtering for fallback method - only filter obvious non-content links
+   */
+  private isLikelyContentLink(href: string, linkText: string | null): boolean {
+    // Only filter out very obvious non-content patterns
+    const obviousNonContentPatterns = [
+      'javascript:',
+      '#',
+      '/login',
+      '/register',
+      '/contact',
+      '/kontakt',
+      '/imprint',
+      '/impressum',
+      '/privacy',
+      '/datenschutz'
+    ];
+
+    const lowerHref = href.toLowerCase();
+    if (obviousNonContentPatterns.some(pattern => lowerHref.includes(pattern))) {
+      return false;
+    }
+
+    // Only filter out very obvious non-content link text
+    if (linkText) {
+      const lowerText = linkText.toLowerCase().trim();
+      // Only filter single character navigation or empty links
+      if ((lowerText.length === 1 && ['>', '<', '→', '←'].includes(lowerText)) || lowerText === '') {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Check if a link is likely a content link (not pagination or auxiliary) - DEPRECATED
+   * This method is too aggressive and filters out valid content links
    */
   private isContentLink(href: string, linkText: string | null): boolean {
     // Skip common non-content patterns in URL
