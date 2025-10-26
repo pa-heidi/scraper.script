@@ -404,41 +404,7 @@ export class PlaywrightExecutor {
       maxItemsPerPage
     });
 
-    // STEP 1: Handle cookie consent ONCE on the main/entry page
-    logger.info(`🍪 Handling cookie consent on entry page: ${entryUrl}`);
-    const entryPage = await context.newPage();
-    try {
-      // Navigate to entry page
-      await entryPage.goto(entryUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
-      });
-
-      // Handle cookie consent ONCE
-      try {
-        const { CookieConsentHandler } = await import('./cookie-consent-handler.service');
-        const cookieHandler = new CookieConsentHandler();
-        const consentResult = await cookieHandler.handleCookieConsent(entryPage, entryUrl, {
-          strategy: 'accept-all',
-          timeout: 5000,
-          useAI: true,
-          languages: ['de', 'en', 'fr'],
-          retryAttempts: 3,
-        });
-
-        if (!consentResult.success) {
-          logger.warn(`Cookie consent handling failed for ${entryUrl}:`, consentResult.error);
-        } else {
-          logger.info(`✅ Cookie consent handled successfully: ${consentResult.method} method, ${consentResult.duration}ms`);
-        }
-      } catch (error) {
-        logger.warn(`Could not handle cookie consent for ${entryUrl}, continuing anyway:`, error);
-      }
-    } finally {
-      await entryPage.close();
-    }
-
-    // STEP 2: Process pages with content URL extraction and content page scraping
+    // STEP 1 & 2: Process pages with cookie consent handling and content URL extraction
     do {
       try {
         logger.info(`📖 Processing page ${pageNumber}: ${currentUrl}`);
@@ -452,6 +418,97 @@ export class PlaywrightExecutor {
           });
 
           logger.info(`✅ Page ${pageNumber} loaded successfully`);
+
+          // Handle cookie consent ONCE on the first page (entry page) using plan metadata
+          if (pageNumber === 1 && plan.metadata.cookieConsent?.detected) {
+            logger.info(`🍪 Handling cookie consent on entry page using plan metadata: ${currentUrl}`);
+
+            // Use cookie consent information from plan metadata
+            const cookieConsentInfo = plan.metadata.cookieConsent;
+            logger.info(`Using stored cookie consent strategy: ${cookieConsentInfo.strategy} (library: ${cookieConsentInfo.library})`, {
+              hasAcceptSelector: !!cookieConsentInfo.acceptButtonSelector,
+              hasRejectSelector: !!cookieConsentInfo.rejectButtonSelector,
+              hasSettingsSelector: !!cookieConsentInfo.settingsButtonSelector,
+              handledSuccessfully: cookieConsentInfo.handledSuccessfully,
+              acceptSelector: cookieConsentInfo.acceptButtonSelector,
+              rejectSelector: cookieConsentInfo.rejectButtonSelector
+            });
+
+            // If the plan indicates cookie consent was handled successfully before,
+            // and we have the necessary selectors, use them directly for faster execution
+            if (cookieConsentInfo.handledSuccessfully &&
+                (cookieConsentInfo.acceptButtonSelector || cookieConsentInfo.rejectButtonSelector)) {
+
+              try {
+                // Use the stored selectors directly for faster handling
+                const strategy = cookieConsentInfo.strategy as any || 'accept-all';
+                let selectorToUse: string | undefined;
+
+                if (strategy === 'accept-all' && cookieConsentInfo.acceptButtonSelector) {
+                  selectorToUse = cookieConsentInfo.acceptButtonSelector;
+                } else if (strategy === 'reject-all' && cookieConsentInfo.rejectButtonSelector) {
+                  selectorToUse = cookieConsentInfo.rejectButtonSelector;
+                } else if (cookieConsentInfo.acceptButtonSelector) {
+                  selectorToUse = cookieConsentInfo.acceptButtonSelector; // Default fallback
+                }
+
+                if (selectorToUse) {
+                  logger.info(`🎯 Using stored selector for direct cookie consent: ${selectorToUse}`);
+
+                  // Wait for the element and click it directly
+                  await page.waitForSelector(selectorToUse, { state: 'visible', timeout: 5000 });
+                  await page.click(selectorToUse);
+                  await page.waitForTimeout(1000); // Wait for consent to be processed
+
+                  logger.info(`✅ Cookie consent handled directly using stored selector: ${selectorToUse}`);
+                } else {
+                  throw new Error('No suitable selector found in plan metadata');
+                }
+              } catch (directError) {
+                // Fall back to the full cookie consent handler
+                logger.warn(`Direct selector failed, falling back to CookieConsentHandler:`, directError);
+
+                const { CookieConsentHandler } = await import('./cookie-consent-handler.service');
+                const cookieHandler = new CookieConsentHandler();
+
+                const consentResult = await cookieHandler.handleCookieConsent(page, currentUrl, {
+                  strategy: cookieConsentInfo.strategy as any || 'accept-all',
+                  timeout: 5000,
+                  useAI: false, // Use heuristics since we have some metadata
+                  languages: ['de', 'en', 'fr'],
+                  retryAttempts: 2,
+                });
+
+                if (!consentResult.success) {
+                  logger.warn(`Cookie consent handling failed for ${currentUrl} despite plan metadata:`, consentResult.error);
+                } else {
+                  logger.info(`✅ Cookie consent handled via fallback handler: ${consentResult.method} method, ${consentResult.duration}ms`);
+                }
+              }
+            } else {
+              // Use the full cookie consent handler if we don't have reliable metadata
+              logger.info(`Using full CookieConsentHandler (no reliable selectors in plan metadata)`);
+
+              const { CookieConsentHandler } = await import('./cookie-consent-handler.service');
+              const cookieHandler = new CookieConsentHandler();
+
+              const consentResult = await cookieHandler.handleCookieConsent(page, currentUrl, {
+                strategy: cookieConsentInfo.strategy as any || 'accept-all',
+                timeout: 5000,
+                useAI: false, // Use heuristics since we have some metadata
+                languages: ['de', 'en', 'fr'],
+                retryAttempts: 2,
+              });
+
+              if (!consentResult.success) {
+                logger.warn(`Cookie consent handling failed for ${currentUrl} despite plan metadata:`, consentResult.error);
+              } else {
+                logger.info(`✅ Cookie consent handled successfully using plan metadata: ${consentResult.method} method, ${consentResult.duration}ms`);
+              }
+            }
+          } else if (pageNumber === 1) {
+            logger.info(`🍪 No cookie consent detected in plan metadata for ${currentUrl}, skipping cookie handling`);
+          }
 
           pagesProcessed++;
 
