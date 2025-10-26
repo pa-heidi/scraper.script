@@ -2060,6 +2060,12 @@ ${plan.metadata.cookieConsent.settingsButtonSelector ? `- **Settings Button**: \
 ${plan.metadata.cookieConsent.bannerSelector ? `- **Banner**: \`${plan.metadata.cookieConsent.bannerSelector}\`` : ""}
 ${plan.metadata.cookieConsent.modalSelector ? `- **Modal**: \`${plan.metadata.cookieConsent.modalSelector}\`` : ""}
 
+### All Detected Selectors
+${plan.metadata.cookieConsent.selectors ? Object.entries(plan.metadata.cookieConsent.selectors)
+    .filter(([key, value]) => value && value.trim() !== '')
+    .map(([key, value]) => `- **${key}**: \`${value}\``)
+    .join('\n') : 'No additional selectors detected'}
+
 **Usage Note**: These selectors can be used by the scraping executor to automatically handle cookie consent in future scraping sessions, ensuring compliance and avoiding blocking.
 `
             : `

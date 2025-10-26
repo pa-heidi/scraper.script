@@ -471,12 +471,29 @@ export class PlaywrightExecutor {
                 const { CookieConsentHandler } = await import('./cookie-consent-handler.service');
                 const cookieHandler = new CookieConsentHandler();
 
-                const consentResult = await cookieHandler.handleCookieConsent(page, currentUrl, {
-                  strategy: cookieConsentInfo.strategy as any || 'accept-all',
-                  timeout: 5000,
-                  languages: ['de', 'en', 'fr'],
-                  retryAttempts: 2,
-                });
+                // Use stored selectors if available
+                let consentResult;
+                if (cookieConsentInfo.selectors && Object.keys(cookieConsentInfo.selectors).length > 0) {
+                  logger.info(`Using stored cookie consent selectors from plan metadata`);
+                  consentResult = await cookieHandler.handleCookieConsentWithSelectors(
+                    page,
+                    currentUrl,
+                    cookieConsentInfo.selectors,
+                    {
+                      strategy: cookieConsentInfo.strategy as any || 'accept-all',
+                      timeout: 5000,
+                      languages: ['de', 'en', 'fr'],
+                      retryAttempts: 2,
+                    }
+                  );
+                } else {
+                  consentResult = await cookieHandler.handleCookieConsent(page, currentUrl, {
+                    strategy: cookieConsentInfo.strategy as any || 'accept-all',
+                    timeout: 5000,
+                    languages: ['de', 'en', 'fr'],
+                    retryAttempts: 2,
+                  });
+                }
 
                 if (!consentResult.success) {
                   logger.warn(`Cookie consent handling failed for ${currentUrl} despite plan metadata:`, consentResult.error);
@@ -491,12 +508,29 @@ export class PlaywrightExecutor {
               const { CookieConsentHandler } = await import('./cookie-consent-handler.service');
               const cookieHandler = new CookieConsentHandler();
 
-              const consentResult = await cookieHandler.handleCookieConsent(page, currentUrl, {
-                strategy: cookieConsentInfo.strategy as any || 'accept-all',
-                timeout: 5000,
-                languages: ['de', 'en', 'fr'],
-                retryAttempts: 2,
-              });
+              // Use stored selectors if available
+              let consentResult;
+              if (cookieConsentInfo.selectors && Object.keys(cookieConsentInfo.selectors).length > 0) {
+                logger.info(`Using stored cookie consent selectors from plan metadata`);
+                consentResult = await cookieHandler.handleCookieConsentWithSelectors(
+                  page,
+                  currentUrl,
+                  cookieConsentInfo.selectors,
+                  {
+                    strategy: cookieConsentInfo.strategy as any || 'accept-all',
+                    timeout: 5000,
+                    languages: ['de', 'en', 'fr'],
+                    retryAttempts: 2,
+                  }
+                );
+              } else {
+                consentResult = await cookieHandler.handleCookieConsent(page, currentUrl, {
+                  strategy: cookieConsentInfo.strategy as any || 'accept-all',
+                  timeout: 5000,
+                  languages: ['de', 'en', 'fr'],
+                  retryAttempts: 2,
+                });
+              }
 
               if (!consentResult.success) {
                 logger.warn(`Cookie consent handling failed for ${currentUrl} despite plan metadata:`, consentResult.error);
