@@ -520,15 +520,26 @@ export class SiblingLinkDiscoveryService {
                 });
             }
 
-            // Step 5: Detect pagination patterns if enabled
+            // Step 5: Enhanced pagination detection if not found in container
             if (
                 options.detectPaginationPattern &&
                 paginationLinks.length === 0
             ) {
-                paginationLinks = this.detectPaginationLinks(
-                    document,
-                    mainPageUrl
+                logger.info(
+                    "🔍 Container analysis complete, now searching for pagination outside container..."
                 );
+                const paginationResult = await this.detectPaginationWithLLM(
+                    document,
+                    mainPageUrl,
+                    listContainer
+                );
+                paginationLinks = paginationResult.paginationLinks;
+
+                // Update LLM analysis with pagination selector if found
+                if (paginationResult.paginationNextSelector && llmAnalysis) {
+                    llmAnalysis.paginationNextSelector =
+                        paginationResult.paginationNextSelector;
+                }
             }
 
             const patterns = this.identifyLinkPatterns(
@@ -1454,7 +1465,7 @@ ${heuristicResult?.container ? "Validate the heuristically found container and e
     }
 
     /**
-     * Compress HTML for LLM analysis - simplified for container-focused processing
+     * Compress HTML for LLM analysis - truncate text content while preserving structure
      */
     private compressHtmlForLLM(html: string, focused: boolean = false): string {
         // Remove scripts, styles, comments, SVGs, and inline CSS
@@ -1469,19 +1480,165 @@ ${heuristicResult?.container ? "Validate the heuristically found container and e
             .replace(/>\s+</g, "><") // Remove whitespace between tags
             .trim();
 
-        // Limit size for token efficiency
-        const maxLength = focused ? 8000 : 15000;
-        if (compressed.length > maxLength) {
-            // Find a good breaking point (end of a div or similar)
-            const truncateAt = compressed.lastIndexOf("</div>", maxLength);
-            if (truncateAt > maxLength * 0.8) {
-                compressed = compressed.substring(0, truncateAt + 6) + "...";
-            } else {
-                compressed = compressed.substring(0, maxLength) + "...";
-            }
-        }
+        // Remove verbose data attributes and unnecessary attributes
+        compressed = this.removeVerboseAttributes(compressed);
+
+        // Truncate text content within common tags while preserving HTML structure
+        compressed = this.truncateTextContent(compressed, focused);
 
         return compressed;
+    }
+
+    /**
+     * Remove verbose data attributes and unnecessary attributes while keeping essential ones
+     */
+    private removeVerboseAttributes(html: string): string {
+        return (
+            html
+                // Remove verbose data attributes (like data-teasertext-*, data-ionas4-*, etc.)
+                .replace(/\s+data-teasertext-[^=]*="[^"]*"/gi, "")
+                .replace(/\s+data-ionas4-[^=]*="[^"]*"/gi, "")
+                .replace(/\s+data-more="[^"]*"/gi, "")
+                .replace(/\s+data-translatable[^=]*="[^"]*"/gi, "")
+
+                // Remove image sources and alt text (keep img tags for structure)
+                .replace(/\s+src="[^"]*"/gi, "")
+                .replace(/\s+srcset="[^"]*"/gi, "")
+                .replace(/\s+alt="[^"]*"/gi, "")
+                .replace(/\s+title="[^"]*"/gi, "")
+
+                // Remove other verbose attributes
+                .replace(/\s+aria-label="[^"]*"/gi, "")
+                .replace(/\s+aria-describedby="[^"]*"/gi, "")
+                .replace(/\s+role="[^"]*"/gi, "")
+                .replace(/\s+tabindex="[^"]*"/gi, "")
+
+                // Remove tracking and analytics attributes
+                .replace(/\s+data-track[^=]*="[^"]*"/gi, "")
+                .replace(/\s+data-analytics[^=]*="[^"]*"/gi, "")
+                .replace(/\s+data-gtm[^=]*="[^"]*"/gi, "")
+
+                // Remove empty spans and paragraphs with no meaningful content
+                .replace(/<span[^>]*>\s*<\/span>/gi, "")
+                .replace(/<p[^>]*>\s*<span[^>]*>\s*<\/span>\s*<\/p>/gi, "")
+
+                // Clean up multiple spaces that might be created
+                .replace(/\s+/g, " ")
+                .replace(/\s+>/g, ">")
+                .replace(/>\s+/g, ">")
+        );
+    }
+
+    /**
+     * Truncate text content within HTML tags while preserving structure and CSS classes
+     */
+    private truncateTextContent(html: string, focused: boolean): string {
+        const maxTextLength = focused ? 100 : 150; // Max characters per text node
+        const maxTitleLength = focused ? 80 : 120; // Max characters for titles
+
+        // Truncate content within common text-heavy tags
+        let processed = html
+            // Truncate title content (h1, h2, h3, etc.)
+            .replace(
+                /<(h[1-6][^>]*)>([^<]{1,}?)<\/h[1-6]>/gi,
+                (match, openTag, content) => {
+                    const truncated =
+                        content.length > maxTitleLength
+                            ? content.substring(0, maxTitleLength) + "..."
+                            : content;
+                    return `<${openTag}>${truncated}</h${openTag.match(/h([1-6])/)?.[1] || "1"}>`;
+                }
+            )
+
+            // Truncate paragraph content
+            .replace(
+                /<(p[^>]*)>([^<]{1,}?)<\/p>/gi,
+                (match, openTag, content) => {
+                    const truncated =
+                        content.length > maxTextLength
+                            ? content.substring(0, maxTextLength) + "..."
+                            : content;
+                    return `<${openTag}>${truncated}</p>`;
+                }
+            )
+
+            // Truncate span content
+            .replace(
+                /<(span[^>]*)>([^<]{1,}?)<\/span>/gi,
+                (match, openTag, content) => {
+                    const truncated =
+                        content.length > maxTextLength
+                            ? content.substring(0, maxTextLength) + "..."
+                            : content;
+                    return `<${openTag}>${truncated}</span>`;
+                }
+            )
+
+            // Truncate div text content (but preserve nested HTML)
+            .replace(
+                /<(div[^>]*)>([^<]{50,}?)<\/div>/gi,
+                (match, openTag, content) => {
+                    // Only truncate if it's pure text content (no nested tags)
+                    if (!content.includes("<")) {
+                        const truncated =
+                            content.length > maxTextLength
+                                ? content.substring(0, maxTextLength) + "..."
+                                : content;
+                        return `<${openTag}>${truncated}</div>`;
+                    }
+                    return match; // Keep as-is if it contains nested HTML
+                }
+            )
+
+            // Truncate link text content
+            .replace(
+                /<(a[^>]*)>([^<]{1,}?)<\/a>/gi,
+                (match, openTag, content) => {
+                    const truncated =
+                        content.length > maxTextLength
+                            ? content.substring(0, maxTextLength) + "..."
+                            : content;
+                    return `<${openTag}>${truncated}</a>`;
+                }
+            )
+
+            // Truncate list item content
+            .replace(
+                /<(li[^>]*)>([^<]{1,}?)<\/li>/gi,
+                (match, openTag, content) => {
+                    const truncated =
+                        content.length > maxTextLength
+                            ? content.substring(0, maxTextLength) + "..."
+                            : content;
+                    return `<${openTag}>${truncated}</li>`;
+                }
+            )
+
+            // Truncate table cell content
+            .replace(
+                /<(td[^>]*)>([^<]{1,}?)<\/td>/gi,
+                (match, openTag, content) => {
+                    const truncated =
+                        content.length > maxTextLength
+                            ? content.substring(0, maxTextLength) + "..."
+                            : content;
+                    return `<${openTag}>${truncated}</td>`;
+                }
+            )
+
+            // Truncate table header content
+            .replace(
+                /<(th[^>]*)>([^<]{1,}?)<\/th>/gi,
+                (match, openTag, content) => {
+                    const truncated =
+                        content.length > maxTextLength
+                            ? content.substring(0, maxTextLength) + "..."
+                            : content;
+                    return `<${openTag}>${truncated}</th>`;
+                }
+            );
+
+        return processed;
     }
 
     /**
@@ -2064,39 +2221,491 @@ ${heuristicResult?.container ? "Validate the heuristically found container and e
         return `${tag}.${className}#${id}[${childCount}]`;
     }
 
-    private detectPaginationLinks(
+    /**
+     * Enhanced pagination detection with heuristic search and LLM analysis
+     */
+    private async detectPaginationWithLLM(
+        document: Document,
+        baseUrl: string,
+        contentContainer?: Element | null
+    ): Promise<{
+        paginationLinks: string[];
+        paginationNextSelector?: string;
+        confidence: number;
+        method: "heuristic" | "llm" | "none";
+    }> {
+        logger.debug("🔍 Starting enhanced pagination detection...");
+
+        // Step 1: Try heuristic detection first
+        const heuristicResult = this.detectPaginationHeuristic(
+            document,
+            baseUrl
+        );
+        if (heuristicResult.paginationLinks.length > 0) {
+            logger.info(
+                `✅ Found ${heuristicResult.paginationLinks.length} pagination links using heuristic method`
+            );
+
+            // Step 1.5: LLM verification of heuristic results for better next selector
+            logger.info(
+                "🔍 Verifying heuristic pagination results with LLM..."
+            );
+            try {
+                const llmVerification = await this.verifyPaginationWithLLM(
+                    document,
+                    baseUrl,
+                    heuristicResult,
+                    contentContainer
+                );
+
+                if (llmVerification.paginationNextSelector) {
+                    logger.info(
+                        `✅ LLM improved next selector: ${llmVerification.paginationNextSelector}`
+                    );
+                    return {
+                        paginationLinks: heuristicResult.paginationLinks,
+                        paginationNextSelector:
+                            llmVerification.paginationNextSelector,
+                        method: "heuristic",
+                        confidence: Math.max(0.8, llmVerification.confidence)
+                    };
+                }
+            } catch (error) {
+                logger.warn(
+                    "⚠️ LLM verification failed, using heuristic results:",
+                    error
+                );
+            }
+
+            return {
+                ...heuristicResult,
+                method: "heuristic",
+                confidence: 0.8
+            };
+        }
+
+        // Step 2: If heuristic fails, try LLM analysis
+        logger.info(
+            "🔄 Heuristic pagination detection failed, trying LLM analysis..."
+        );
+        try {
+            const llmResult = await this.detectPaginationWithLLMAnalysis(
+                document,
+                baseUrl,
+                contentContainer
+            );
+            if (llmResult.paginationLinks.length > 0) {
+                logger.info(
+                    `✅ Found ${llmResult.paginationLinks.length} pagination links using LLM analysis`
+                );
+                return {
+                    ...llmResult,
+                    method: "llm"
+                };
+            }
+        } catch (error) {
+            logger.warn("⚠️ LLM pagination detection failed:", error);
+        }
+
+        logger.info("❌ No pagination found using any method");
+        return {
+            paginationLinks: [],
+            method: "none",
+            confidence: 0
+        };
+    }
+
+    /**
+     * Heuristic pagination detection using common patterns
+     */
+    private detectPaginationHeuristic(
         document: Document,
         baseUrl: string
-    ): string[] {
+    ): {
+        paginationLinks: string[];
+        paginationNextSelector?: string;
+    } {
         const paginationLinks: string[] = [];
+        let paginationNextSelector: string | undefined;
 
-        // Common pagination selectors
+        // Common pagination selectors (ordered by specificity)
         const selectors = [
+            // Standard pagination classes
             ".pagination a[href]",
             ".pager a[href]",
             ".page-numbers a[href]",
+            ".paginate a[href]",
+            ".page-nav a[href]",
+
+            // Semantic attributes
             'a[rel="next"]',
             'a[rel="prev"]',
-            'a[href*="page"]'
+            'a[aria-label*="next" i]',
+            'a[aria-label*="previous" i]',
+
+            // German pagination patterns
+            'a[href*="seite"]',
+            'a[href*="page"]',
+            'a[href*="skip"]',
+            'a[href*="offset"]',
+
+            // Generic patterns (last resort)
+            'a[href*="&p="]',
+            'a[href*="?p="]',
+            'a[href*="&page="]',
+            'a[href*="?page="]'
         ];
 
         for (const selector of selectors) {
             const links = document.querySelectorAll(selector);
-            links.forEach((link) => {
-                const href = link.getAttribute("href");
-                if (href) {
-                    const resolvedUrl = this.resolveUrl(href, baseUrl);
-                    if (
-                        this.isValidUrl(resolvedUrl) &&
-                        !paginationLinks.includes(resolvedUrl)
+            if (links.length > 0) {
+                logger.debug(
+                    `🎯 Found pagination elements with selector: ${selector}`
+                );
+
+                // Check for "next" link specifically and create precise selector
+                const nextLink = Array.from(links).find((link) => {
+                    const text = link.textContent?.toLowerCase().trim() || "";
+                    const ariaLabel =
+                        link.getAttribute("aria-label")?.toLowerCase() || "";
+                    const className = link.className.toLowerCase();
+                    const rel = link.getAttribute("rel")?.toLowerCase() || "";
+
+                    return (
+                        text.includes("next") ||
+                        text.includes("weiter") ||
+                        text.includes("››") ||
+                        text === ">" ||
+                        ariaLabel.includes("next") ||
+                        ariaLabel.includes("weiter") ||
+                        className.includes("next") ||
+                        className.includes("pn_next") ||
+                        rel === "next"
+                    );
+                });
+
+                if (nextLink && !paginationNextSelector) {
+                    // Create a more specific selector for the next link
+                    const nextClass = nextLink.className;
+                    const nextRel = nextLink.getAttribute("rel");
+                    const nextText = nextLink.textContent?.trim();
+                    const baseSelector = selector.replace(" a[href]", "");
+
+                    if (nextRel === "next") {
+                        paginationNextSelector = `${baseSelector} a[rel="next"]`;
+                    } else if (nextClass && nextClass.includes("next")) {
+                        const nextClassSelector = nextClass
+                            .split(" ")
+                            .find((cls) => cls.includes("next"));
+                        if (nextClassSelector) {
+                            paginationNextSelector = `${baseSelector} a.${nextClassSelector}`;
+                        }
+                    } else if (nextClass && nextClass.includes("pn_next")) {
+                        paginationNextSelector = `${baseSelector} .pn_next`;
+                    } else if (
+                        nextText &&
+                        (nextText.includes("››") || nextText === ">")
                     ) {
-                        paginationLinks.push(resolvedUrl);
+                        // For text-based selectors, we'll use the general selector
+                        paginationNextSelector = selector;
+                    } else {
+                        // Fallback to the general selector
+                        paginationNextSelector = selector;
                     }
+
+                    logger.debug(
+                        `🎯 Created next selector: ${paginationNextSelector}`
+                    );
                 }
-            });
+
+                links.forEach((link) => {
+                    const href = link.getAttribute("href");
+                    if (href) {
+                        const resolvedUrl = this.resolveUrl(href, baseUrl);
+                        if (
+                            this.isValidUrl(resolvedUrl) &&
+                            !paginationLinks.includes(resolvedUrl)
+                        ) {
+                            paginationLinks.push(resolvedUrl);
+                        }
+                    }
+                });
+
+                // If we found links with this selector, don't try less specific ones
+                if (paginationLinks.length > 0) {
+                    break;
+                }
+            }
         }
 
-        return paginationLinks;
+        return { paginationLinks, paginationNextSelector };
+    }
+
+    /**
+     * LLM-based pagination detection for complex cases
+     */
+    private async detectPaginationWithLLMAnalysis(
+        document: Document,
+        baseUrl: string,
+        contentContainer?: Element | null
+    ): Promise<{
+        paginationLinks: string[];
+        paginationNextSelector?: string;
+        confidence: number;
+    }> {
+        // Get HTML around the content container and footer areas where pagination usually appears
+        let analysisHtml = "";
+
+        if (contentContainer) {
+            // Get the parent container and siblings that might contain pagination
+            const parent = contentContainer.parentElement;
+            if (parent) {
+                analysisHtml = parent.outerHTML;
+            } else {
+                analysisHtml = contentContainer.outerHTML;
+            }
+        } else {
+            // Fallback to footer and main content areas
+            const footerElements = document.querySelectorAll(
+                'footer, .footer, .pagination-wrapper, .page-nav, [class*="pag"]'
+            );
+            const mainElements = document.querySelectorAll(
+                'main, .main, .content, [role="main"]'
+            );
+
+            const relevantElements = [
+                ...Array.from(footerElements),
+                ...Array.from(mainElements)
+            ];
+            analysisHtml = relevantElements
+                .map((el) => el.outerHTML)
+                .join("\n");
+        }
+
+        if (!analysisHtml) {
+            analysisHtml = document.body.outerHTML;
+        }
+
+        // Compress HTML for LLM analysis
+        const compressedHtml = this.compressHtmlForLLM(analysisHtml, true);
+
+        const prompt = `Analyze this HTML to find pagination elements. Look for:
+1. Links that navigate to next/previous pages
+2. Numbered page links (1, 2, 3, etc.)
+3. "Next", "Previous", "Weiter", "Zurück" buttons/links
+4. Page navigation controls
+
+HTML to analyze:
+${compressedHtml}
+
+Respond with JSON only:
+{
+  "paginationNextSelector": "CSS selector for next page link (if found)",
+  "paginationLinks": ["array of pagination URLs found"],
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation"
+}`;
+
+        const llmRequest = {
+            prompt,
+            systemMessage:
+                "You are an expert at analyzing HTML structure for pagination elements. Respond with valid JSON only.",
+            format: "json" as const,
+            temperature: 0.1,
+            maxTokens: 1000
+        };
+
+        try {
+            const llmResponse = await this.llmService.generate(llmRequest);
+            const analysis = JSON.parse(llmResponse.content);
+
+            logger.debug("🧠 LLM pagination analysis:", analysis);
+
+            // Validate and extract pagination links
+            const paginationLinks: string[] = [];
+            if (
+                analysis.paginationLinks &&
+                Array.isArray(analysis.paginationLinks)
+            ) {
+                for (const link of analysis.paginationLinks) {
+                    if (typeof link === "string") {
+                        const resolvedUrl = this.resolveUrl(link, baseUrl);
+                        if (this.isValidUrl(resolvedUrl)) {
+                            paginationLinks.push(resolvedUrl);
+                        }
+                    }
+                }
+            }
+
+            // Validate pagination selector
+            let paginationNextSelector: string | undefined;
+            if (
+                analysis.paginationNextSelector &&
+                typeof analysis.paginationNextSelector === "string"
+            ) {
+                try {
+                    // Test if selector is valid
+                    document.querySelector(analysis.paginationNextSelector);
+                    paginationNextSelector = analysis.paginationNextSelector;
+                } catch (error) {
+                    logger.warn(
+                        `⚠️ Invalid LLM pagination selector: ${analysis.paginationNextSelector}`
+                    );
+                }
+            }
+
+            return {
+                paginationLinks,
+                paginationNextSelector,
+                confidence: Math.min(Math.max(analysis.confidence || 0, 0), 1)
+            };
+        } catch (error) {
+            logger.error("❌ LLM pagination analysis failed:", error);
+            return {
+                paginationLinks: [],
+                confidence: 0
+            };
+        }
+    }
+
+    /**
+     * LLM verification of heuristic pagination results to improve next selector
+     */
+    private async verifyPaginationWithLLM(
+        document: Document,
+        baseUrl: string,
+        heuristicResult: {
+            paginationLinks: string[];
+            paginationNextSelector?: string;
+        },
+        contentContainer?: Element | null
+    ): Promise<{
+        paginationNextSelector?: string;
+        confidence: number;
+    }> {
+        // Find the pagination container by looking for elements that contain the pagination links
+        let paginationContainer: Element | null = null;
+
+        // Try to find the container that holds the pagination
+        const paginationSelectors = [
+            ".pagination",
+            ".pager",
+            ".page-numbers",
+            ".paginate",
+            ".page-nav"
+        ];
+        for (const selector of paginationSelectors) {
+            const container = document.querySelector(selector);
+            if (container) {
+                paginationContainer = container;
+                break;
+            }
+        }
+
+        // If no specific pagination container found, look for parent of pagination links
+        if (!paginationContainer && heuristicResult.paginationNextSelector) {
+            try {
+                const nextElement = document.querySelector(
+                    heuristicResult.paginationNextSelector
+                );
+                if (nextElement) {
+                    paginationContainer =
+                        nextElement.closest(
+                            ".pagination, .pager, .page-numbers, .paginate, .page-nav"
+                        ) || nextElement.parentElement;
+                }
+            } catch (error) {
+                logger.debug(
+                    "Could not find pagination container from next selector"
+                );
+            }
+        }
+
+        if (!paginationContainer) {
+            logger.debug("No pagination container found for LLM verification");
+            return { confidence: 0 };
+        }
+
+        // Compress the pagination HTML for LLM analysis
+        const paginationHtml = this.compressHtmlForLLM(
+            paginationContainer.outerHTML,
+            true
+        );
+
+        const prompt = `Analyze this pagination HTML snippet to identify the best CSS selector for the "next page" link.
+
+Found pagination links: ${heuristicResult.paginationLinks.slice(0, 3).join(", ")}
+Current next selector: ${heuristicResult.paginationNextSelector || "none"}
+
+HTML snippet:
+${paginationHtml}
+
+Look for:
+1. Links with text like "next", "weiter", "››", ">"
+2. Links with rel="next" attribute
+3. Links with CSS classes containing "next"
+4. The most specific selector that targets only the next page link
+
+Respond with JSON only:
+{
+  "paginationNextSelector": "most specific CSS selector for next page link",
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation of why this selector was chosen"
+}`;
+
+        const llmRequest = {
+            prompt,
+            systemMessage:
+                "You are an expert at analyzing HTML pagination structures. Respond with valid JSON only.",
+            format: "json" as const,
+            temperature: 0.1,
+            maxTokens: 800
+        };
+
+        try {
+            const llmResponse = await this.llmService.generate(llmRequest);
+            const analysis = JSON.parse(llmResponse.content);
+
+            logger.debug("🧠 LLM pagination verification:", analysis);
+
+            // Validate the selector
+            let paginationNextSelector: string | undefined;
+            if (
+                analysis.paginationNextSelector &&
+                typeof analysis.paginationNextSelector === "string"
+            ) {
+                try {
+                    // Test if selector is valid and finds an element
+                    const testElement = document.querySelector(
+                        analysis.paginationNextSelector
+                    );
+                    if (testElement) {
+                        paginationNextSelector =
+                            analysis.paginationNextSelector;
+                        logger.debug(
+                            `✅ LLM selector validated: ${paginationNextSelector}`
+                        );
+                    } else {
+                        logger.warn(
+                            `⚠️ LLM selector finds no elements: ${analysis.paginationNextSelector}`
+                        );
+                    }
+                } catch (error) {
+                    logger.warn(
+                        `⚠️ Invalid LLM selector: ${analysis.paginationNextSelector}`,
+                        error
+                    );
+                }
+            }
+
+            return {
+                paginationNextSelector,
+                confidence: Math.min(Math.max(analysis.confidence || 0, 0), 1)
+            };
+        } catch (error) {
+            logger.error("❌ LLM pagination verification failed:", error);
+            return { confidence: 0 };
+        }
     }
 
     private identifyLinkPatterns(
