@@ -120,3 +120,6 @@ quick-test.*
 
 # Generated plan files
 plans/
+
+# Execution results
+execution-results/

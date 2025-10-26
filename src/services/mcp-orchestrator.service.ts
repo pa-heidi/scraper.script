@@ -916,6 +916,41 @@ export class MCPOrchestratorService implements MCPOrchestrator {
                         ),
                         updatedAt: new Date().toISOString()
                     });
+
+                    // Save execution results to JSON file for inspection
+                    try {
+                        const fs = await import('fs/promises');
+                        const path = await import('path');
+
+                        const resultsDir = 'execution-results';
+                        await fs.mkdir(resultsDir, { recursive: true });
+
+                        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                        const filename = `execution-${runId}-${timestamp}.json`;
+                        const filepath = path.join(resultsDir, filename);
+
+                        const resultData = {
+                            runId: executionResult.runId,
+                            planId: executionResult.planId,
+                            status: executionResult.status,
+                            startTime: executionResult.startTime,
+                            endTime: executionResult.endTime,
+                            extractedData: executionResult.extractedData,
+                            metrics: executionResult.metrics,
+                            errors: executionResult.errors,
+                            timestamp: new Date().toISOString()
+                        };
+
+                        await fs.writeFile(filepath, JSON.stringify(resultData, null, 2), 'utf8');
+                        logger.info(`Execution results saved to: ${filepath}`, {
+                            itemsExtracted: executionResult.metrics.itemsExtracted,
+                            pagesProcessed: executionResult.metrics.pagesProcessed,
+                            status: executionResult.status
+                        });
+                    } catch (error) {
+                        logger.warn('Failed to save execution results to JSON file:', error);
+                    }
+
                     return { stored: true };
                 }
             );
