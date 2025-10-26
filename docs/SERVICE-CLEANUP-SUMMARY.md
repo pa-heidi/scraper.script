@@ -66,6 +66,7 @@ Removed unused services and cleaned up their references to make the project more
 - `src/services/mcp-orchestrator.service.ts`
 - `src/services/cookie-consent-handler.service.ts`
 - `src/services/index.ts`
+- `src/interfaces/core.ts`
 - `docs/PROJECT-STRUCTURE.md`
 
 ## Files Deleted
@@ -73,6 +74,19 @@ Removed unused services and cleaned up their references to make the project more
 - `src/services/content-pattern-analyzer.service.ts`
 - `src/services/site-analysis.service.ts`
 - `src/services/llm-planner.service.ts`
+
+## Interfaces Removed
+
+### Unused Content Pattern Analysis Interfaces
+- `ContentPattern` - Pattern definition for content analysis
+- `ContentPatternAnalysis` - Analysis results structure
+- `ContentMatch` - Content matching results
+- `ListContainer` - List container identification
+- `DOMStructure` - DOM structure representation
+- `ContentVariation` - Content variation patterns
+- `ContentPage` - Content page representation
+
+These interfaces were only used by the deleted services and are no longer needed.
 
 ## Next Steps
 

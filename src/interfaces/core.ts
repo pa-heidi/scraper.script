@@ -157,65 +157,7 @@ export interface PlanGenerationResult {
   };
 }
 
-// Content Pattern Analysis Interfaces (Requirements 8.1, 8.2, 8.3, 8.4, 8.5)
 
-export interface ContentPattern {
-  title: string;
-  description: string;
-  metadata: Record<string, any>;
-  domStructure: DOMStructure;
-  contentSignature: string; // Unique identifier for this content type
-}
-
-export interface DOMStructure {
-  tagName: string;
-  className?: string;
-  id?: string;
-  attributes: Record<string, string>;
-  textContent?: string;
-  children: DOMStructure[];
-  depth: number;
-  path: string; // CSS selector path
-}
-
-export interface ContentMatch {
-  similarity: number; // 0-1 score of how similar this element is to content examples
-  domPath: string; // CSS selector path to the matching element
-  extractedData: Record<string, any>; // Data extracted from this element
-  containerElement: string; // Parent container holding this content
-  confidence: number;
-}
-
-export interface ListContainer {
-  selector: string; // CSS selector for the container holding list items
-  itemCount: number; // Number of similar items found in this container
-  confidence: number; // 0-1 confidence that this is the correct list container
-  sampleItems: string[]; // Sample selectors for items in this container
-  excludeSelectors: string[]; // Selectors to exclude (nav, header, footer)
-}
-
-export interface ContentPatternAnalysis {
-  contentSelectors: string[];
-  excludeSelectors: string[];
-  commonContentContainer: string;
-  contentVariations: ContentVariation[];
-  confidence: number;
-  listContainers: ListContainer[];
-  patterns: ContentPattern[];
-}
-
-export interface ContentVariation {
-  pageType: string;
-  selectors: Record<string, string>;
-  examples: string[];
-}
-
-export interface ContentPage {
-  url: string;
-  html: string;
-  domStructure: DOMStructure;
-  extractedContent: Record<string, any>;
-}
 
 // MCP Orchestrator Interfaces (Requirements 1.1, 2.1, 2.4, 4.1, 6.1, 8.1)
 
@@ -254,18 +196,6 @@ export interface ExecutionOptions {
   maxItems?: number;
   testMode?: boolean;
   maxItemsPerPage?: number; // Default: 2 for testing
-}
-
-export interface QueueMessage {
-  id: string;
-  type: 'plan_generation' | 'plan_execution' | 'plan_validation' | 'plan_retraining';
-  payload: any;
-  priority: number;
-  createdAt: Date;
-  attempts: number;
-  maxAttempts: number;
-  nextRetryAt?: Date;
-  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 }
 
 export interface WorkflowState {

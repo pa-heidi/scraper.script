@@ -46,13 +46,6 @@ export type {
 } from "./sandbox-executor.service";
 
 export type {
-    ContentPattern,
-    ContentPatternAnalysis,
-    ContentMatch,
-    ListContainer,
-    DOMStructure,
-    ContentPage,
-    ContentVariation,
     PlanApproval,
     PlanLifecycleStatus,
     ExecutionRequest,
