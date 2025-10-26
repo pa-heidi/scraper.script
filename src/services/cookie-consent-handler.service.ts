@@ -28,7 +28,7 @@ export interface ConsentButtons {
 
 export interface ConsentHandlingResult {
   success: boolean;
-  method: 'heuristic' | 'ai' | 'llm-primary' | 'llm-fallback' | 'none';
+  method: 'heuristic' | 'ai' | 'llm-primary' | 'llm-fallback' | 'stored-selectors' | 'none';
   buttonClicked?: string;
   error?: string;
   duration: number;
@@ -44,6 +44,14 @@ export interface ConsentHandlingResult {
       save?: string;
       close?: string;
     };
+    // Enhanced selectors for plan reuse
+    selectors?: Record<string, string>;
+    acceptButtonSelector?: string;
+    rejectButtonSelector?: string;
+    settingsButtonSelector?: string;
+    bannerSelector?: string;
+    modalSelector?: string;
+    handledSuccessfully?: boolean;
     handledAt?: Date;
     llmPlan?: CookieConsentLLMPlan;
     llmVerification?: LLMVerificationResult;
@@ -90,9 +98,104 @@ export class CookieConsentHandler {
       timeout: parseInt(process.env.COOKIE_CONSENT_TIMEOUT || '5000'),
       retryAttempts: 3,
       fallbackStrategy: 'continue',
-
       ...config,
     };
+  }
+
+  /**
+   * Handle cookie consent using pre-existing selectors from plan metadata
+   */
+  async handleCookieConsentWithSelectors(
+    page: Page,
+    url: string,
+    selectors: Record<string, string>,
+    config?: Partial<CookieConsentConfig>
+  ): Promise<ConsentHandlingResult> {
+    const startTime = Date.now();
+    const finalConfig = { ...this.config, ...config };
+
+    try {
+      logger.info(`🍪 Using pre-existing selectors for cookie consent on ${url}`);
+
+      // Try to use the stored dialog selector
+      if (selectors.dialog) {
+        try {
+          const dialogElement = await page.$(selectors.dialog);
+          if (dialogElement && await dialogElement.isVisible()) {
+            logger.debug(`Found dialog using stored selector: ${selectors.dialog}`);
+
+            // Try to click the appropriate button based on strategy
+            let buttonSelector = '';
+            let buttonType = '';
+
+            switch (finalConfig.strategy) {
+              case 'accept-all':
+                buttonSelector = selectors.accept || selectors.acceptButtonSelector || '';
+                buttonType = 'accept';
+                break;
+              case 'reject-all':
+                buttonSelector = selectors.reject || selectors.rejectButtonSelector || '';
+                buttonType = 'reject';
+                break;
+              case 'minimal':
+                buttonSelector = selectors.settings || selectors.settingsButtonSelector || selectors.reject || '';
+                buttonType = 'settings/reject';
+                break;
+              default:
+                buttonSelector = selectors.accept || '';
+                buttonType = 'accept';
+            }
+
+            if (buttonSelector) {
+              logger.debug(`Attempting to click ${buttonType} button: ${buttonSelector}`);
+
+              try {
+                await page.click(buttonSelector, { timeout: 5000 });
+                await page.waitForTimeout(1000); // Wait for action to complete
+
+                return {
+                  success: true,
+                  method: 'stored-selectors',
+                  buttonClicked: buttonType,
+                  duration: Date.now() - startTime,
+                  metadata: {
+                    detected: true,
+                    strategy: finalConfig.strategy as any,
+                    selectors,
+                    handledSuccessfully: true,
+                    handledAt: new Date()
+                  }
+                };
+              } catch (clickError) {
+                logger.warn(`Failed to click stored selector ${buttonSelector}:`, clickError);
+                // Fall through to full detection
+              }
+            }
+          }
+        } catch (error) {
+          logger.warn(`Failed to use stored dialog selector ${selectors.dialog}:`, error);
+          // Fall through to full detection
+        }
+      }
+
+      // If stored selectors failed, fall back to full detection
+      logger.info(`Stored selectors failed, falling back to full cookie consent detection`);
+      return await this.handleCookieConsent(page, url, config);
+
+    } catch (error) {
+      logger.error(`❌ Error handling cookie consent with selectors on ${url}:`, error);
+      return {
+        success: false,
+        method: 'stored-selectors',
+        error: error instanceof Error ? error.message : String(error),
+        duration: Date.now() - startTime,
+        metadata: {
+          detected: false,
+          strategy: 'none-detected',
+          handledAt: new Date()
+        }
+      };
+    }
   }
 
   /**
@@ -127,8 +230,8 @@ export class CookieConsentHandler {
       await this.captureDebugScreenshot(page, 'dialog-detected');
 
       // Get the dialog element
-      const dialogElement = await this.getCookieDialogElement(page);
-      if (!dialogElement) {
+      const dialogResult = await this.getCookieDialogElement(page);
+      if (!dialogResult) {
         logger.warn(`Cookie dialog detected but no dialog element found on ${url}`);
         return {
           success: false,
@@ -148,6 +251,10 @@ export class CookieConsentHandler {
       if (library) {
         logger.debug(`Detected cookie consent library: ${library}`);
       }
+
+      // Extract dialog element and selector
+      const dialogElement = dialogResult.element;
+      const dialogSelector = dialogResult.selector;
 
       // Use heuristics first, then LLM analysis, with fallback logic
       let result: ConsentHandlingResult;
@@ -189,6 +296,16 @@ export class CookieConsentHandler {
                 save: buttons.save?.selector,
                 close: buttons.close?.selector
               },
+              // Enhanced selectors for plan reuse (from LLM plan)
+              selectors: llmResult.llmPlan ? this.extractSelectorsFromLLMPlan(llmResult.llmPlan, dialogSelector) : {
+                dialog: dialogSelector
+              },
+              acceptButtonSelector: buttons.acceptAll?.selector,
+              rejectButtonSelector: buttons.rejectAll?.selector,
+              settingsButtonSelector: buttons.settings?.selector,
+              bannerSelector: dialogSelector,
+              modalSelector: dialogSelector,
+              handledSuccessfully: true,
               handledAt: new Date(),
               llmPlan: llmResult.llmPlan
             }
@@ -210,6 +327,17 @@ export class CookieConsentHandler {
                 save: buttons.save?.selector,
                 close: buttons.close?.selector
               },
+              // Include selectors even on failure for debugging
+              selectors: {
+                dialog: dialogSelector,
+                accept: buttons.acceptAll?.selector || '',
+                reject: buttons.rejectAll?.selector || '',
+                save: buttons.save?.selector || '',
+                close: buttons.close?.selector || ''
+              },
+              bannerSelector: dialogSelector,
+              modalSelector: dialogSelector,
+              handledSuccessfully: false,
               handledAt: new Date()
             }
           };
@@ -231,6 +359,20 @@ export class CookieConsentHandler {
               save: buttons.save?.selector,
               close: buttons.close?.selector
             },
+            // Enhanced selectors for plan reuse
+            selectors: {
+              dialog: dialogSelector,
+              accept: buttons.acceptAll?.selector || '',
+              reject: buttons.rejectAll?.selector || '',
+              save: buttons.save?.selector || '',
+              close: buttons.close?.selector || ''
+            },
+            acceptButtonSelector: buttons.acceptAll?.selector,
+            rejectButtonSelector: buttons.rejectAll?.selector,
+            settingsButtonSelector: buttons.settings?.selector,
+            bannerSelector: dialogSelector,
+            modalSelector: dialogSelector,
+            handledSuccessfully: true,
             handledAt: new Date()
           }
         };
@@ -376,7 +518,7 @@ export class CookieConsentHandler {
   /**
    * Get the main cookie dialog element
    */
-  private async getCookieDialogElement(page: Page): Promise<ElementHandle | null> {
+  private async getCookieDialogElement(page: Page): Promise<{ element: ElementHandle; selector: string } | null> {
     try {
       // Enhanced dialog selectors including disclaimer and modal patterns
       const dialogSelectors = [
@@ -414,12 +556,22 @@ export class CookieConsentHandler {
           const elements = await page.$$(selector);
           for (const element of elements) {
             const isVisible = await element.isVisible();
-            if (isVisible) {
+            // Additional check for computed styles to ensure element is truly visible
+            const isReallyVisible = await element.evaluate((el: Element) => {
+              const style = window.getComputedStyle(el);
+              return style.display !== 'none' &&
+                     style.visibility !== 'hidden' &&
+                     style.opacity !== '0' &&
+                     (el as HTMLElement).offsetWidth > 0 &&
+                     (el as HTMLElement).offsetHeight > 0;
+            });
+
+            if (isVisible && isReallyVisible) {
               // Additional check: ensure it's likely a dialog
               const boundingBox = await element.boundingBox();
               if (boundingBox && await this.isLikelyCookieDialog(element, boundingBox)) {
                 logger.debug(`Found cookie dialog element with selector: ${selector}`);
-                return element;
+                return { element, selector };
               }
             }
           }
@@ -441,7 +593,7 @@ export class CookieConsentHandler {
               const textContent = await element.textContent();
               if (textContent && this.containsCookieKeywords(textContent)) {
                 logger.debug(`Found cookie dialog element via fallback method`);
-                return element;
+                return { element, selector: 'fallback-dialog' };
               }
             }
           }
@@ -455,6 +607,36 @@ export class CookieConsentHandler {
       logger.debug(`Error getting cookie dialog element:`, error);
       return null;
     }
+  }
+
+  /**
+   * Extract selectors from LLM plan for reuse
+   */
+  private extractSelectorsFromLLMPlan(llmPlan: CookieConsentLLMPlan, dialogSelector: string): Record<string, string> {
+    const selectors: Record<string, string> = {
+      dialog: dialogSelector
+    };
+
+    // Extract selectors from LLM plan steps
+    llmPlan.steps.forEach((step, index) => {
+      if (step.action === 'click') {
+        selectors[`step_${index + 1}`] = step.selector;
+
+        // Try to categorize based on description
+        const desc = step.description.toLowerCase();
+        if (desc.includes('accept') || desc.includes('zustimmen')) {
+          selectors.accept = step.selector;
+        } else if (desc.includes('reject') || desc.includes('ablehnen')) {
+          selectors.reject = step.selector;
+        } else if (desc.includes('save') || desc.includes('speichern')) {
+          selectors.save = step.selector;
+        } else if (desc.includes('settings') || desc.includes('einstellungen')) {
+          selectors.settings = step.selector;
+        }
+      }
+    });
+
+    return selectors;
   }
 
   /**
@@ -579,6 +761,18 @@ export class CookieConsentHandler {
 
       for (const button of allButtons) {
         try {
+          // Check if button is truly visible (not in a hidden container)
+          const isButtonVisible = await button.evaluate((el: Element) => {
+            const style = window.getComputedStyle(el);
+            return style.display !== 'none' &&
+                   style.visibility !== 'hidden' &&
+                   style.opacity !== '0' &&
+                   (el as HTMLElement).offsetWidth > 0 &&
+                   (el as HTMLElement).offsetHeight > 0;
+          });
+
+          if (!isButtonVisible) continue;
+
           const buttonText = await button.textContent();
           const buttonClass = await button.getAttribute('class') || '';
           const buttonId = await button.getAttribute('id') || '';
@@ -1109,7 +1303,6 @@ Focus on buttons that handle cookie consent.
   }
 
 
-
   /**
    * Verify cookie consent success using LLM analysis
    */
@@ -1309,11 +1502,14 @@ Important:
       const domain = new URL(url).hostname;
 
       // First, use heuristic search to find cookie dialog and buttons
-      const dialogElement = await this.getCookieDialogElement(page);
-      if (!dialogElement) {
+      const dialogResult = await this.getCookieDialogElement(page);
+      if (!dialogResult) {
         logger.warn('No cookie dialog element found for LLM plan generation');
         return null;
       }
+
+      const dialogElement = dialogResult.element;
+      const dialogSelector = dialogResult.selector;
 
       // Get the HTML of the specific dialog element (not the whole page)
       const dialogHTML = await dialogElement.innerHTML();
