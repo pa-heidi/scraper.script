@@ -8,7 +8,7 @@ export interface LLMRequest {
   timestamp: Date;
   service: string; // e.g., 'cookie-consent', 'sibling-detection', 'pagination-detection', 'content-analysis'
   method: string; // e.g., 'detectCookieDialog', 'findSiblingLinks', 'analyzePagination'
-  provider: 'openai' | 'ollama';
+  provider: 'openai' | 'ollama' | 'openrouter';
   model: string;
   prompt: string;
   systemMessage?: string;

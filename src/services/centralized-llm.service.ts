@@ -10,10 +10,11 @@ import { logger } from '../utils/logger';
 import { getLLMTracker } from './llm-tracker.service';
 
 export interface LLMConfig {
-  primaryProvider: 'openai' | 'ollama';
-  fallbackProvider?: 'openai' | 'ollama';
+  primaryProvider: 'openai' | 'ollama' | 'openrouter';
+  fallbackProvider?: 'openai' | 'ollama' | 'openrouter';
   openaiModel?: string;
   ollamaModel?: string;
+  openrouterModel?: string;
   maxTokens?: number;
   temperature?: number;
 }
@@ -24,7 +25,7 @@ export interface LLMRequest {
   maxTokens?: number;
   temperature?: number;
   format?: 'json' | 'text';
-  provider?: 'openai' | 'ollama'; // Override for specific requests
+  provider?: 'openai' | 'ollama' | 'openrouter'; // Override for specific requests
   // Tracking information
   service?: string; // e.g., 'cookie-consent', 'sibling-detection', 'pagination-detection'
   method?: string; // e.g., 'detectCookieDialog', 'findSiblingLinks', 'analyzePagination'
@@ -38,7 +39,7 @@ export interface LLMRequest {
 
 export interface LLMResponse {
   content: string;
-  provider: 'openai' | 'ollama';
+  provider: 'openai' | 'ollama' | 'openrouter';
   model: string;
   tokensUsed?: number;
   finishReason?: string;
@@ -47,6 +48,7 @@ export interface LLMResponse {
 
 export class CentralizedLLMService {
   private openai?: OpenAI;
+  private openrouter?: OpenAI;
   private ollama: OllamaService;
   private config: LLMConfig;
 
@@ -56,6 +58,7 @@ export class CentralizedLLMService {
       fallbackProvider: 'ollama',
       openaiModel: 'gpt-4o-mini',
       ollamaModel: process.env.OLLAMA_MODEL || 'llama3.2:1b',
+      openrouterModel: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
       maxTokens: 8000,
       temperature: 0.1,
       ...config,
@@ -65,6 +68,14 @@ export class CentralizedLLMService {
     if (process.env.OPENAI_API_KEY) {
       this.openai = new OpenAI({
         apiKey: process.env.OPENAI_API_KEY,
+      });
+    }
+
+    // Initialize OpenRouter if API key is available
+    if (process.env.OPENROUTER_API_KEY) {
+      this.openrouter = new OpenAI({
+        apiKey: process.env.OPENROUTER_API_KEY,
+        baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
       });
     }
 
@@ -80,6 +91,8 @@ export class CentralizedLLMService {
       fallbackProvider: this.config.fallbackProvider,
       openaiAvailable: !!this.openai,
       openaiModel: this.config.openaiModel,
+      openrouterAvailable: !!this.openrouter,
+      openrouterModel: this.config.openrouterModel,
       ollamaModel: this.config.ollamaModel,
     });
   }
@@ -88,15 +101,19 @@ export class CentralizedLLMService {
    * Generate response using the configured LLM providers
    */
   async generate(request: LLMRequest): Promise<LLMResponse> {
-    const provider = request.provider || this.config.primaryProvider;
+    const provider: 'openai' | 'ollama' | 'openrouter' = request.provider || this.config.primaryProvider;
     const tracker = getLLMTracker();
 
     // Track the request
+    const model = provider === 'openai' ? this.config.openaiModel! :
+                  provider === 'openrouter' ? this.config.openrouterModel! :
+                  this.config.ollamaModel!;
+
     const requestId = tracker.trackRequest({
       service: request.service || 'unknown',
       method: request.method || 'generate',
       provider,
-      model: provider === 'openai' ? this.config.openaiModel! : this.config.ollamaModel!,
+      model,
       prompt: request.prompt,
       systemMessage: request.systemMessage,
       maxTokens: request.maxTokens || this.config.maxTokens,
@@ -126,6 +143,8 @@ export class CentralizedLLMService {
 
       if (provider === 'openai') {
         response = await this.generateWithOpenAI(request);
+      } else if (provider === 'openrouter') {
+        response = await this.generateWithOpenRouter(request);
       } else {
         response = await this.generateWithOllama(request);
       }
@@ -171,6 +190,8 @@ export class CentralizedLLMService {
 
           if (this.config.fallbackProvider === 'openai') {
             fallbackResponse = await this.generateWithOpenAI(request);
+          } else if (this.config.fallbackProvider === 'openrouter') {
+            fallbackResponse = await this.generateWithOpenRouter(request);
           } else {
             fallbackResponse = await this.generateWithOllama(request);
           }
@@ -281,6 +302,69 @@ export class CentralizedLLMService {
   }
 
   /**
+   * Generate response using OpenRouter
+   */
+  private async generateWithOpenRouter(request: LLMRequest): Promise<LLMResponse> {
+    if (!this.openrouter) {
+      throw new Error('OpenRouter client not initialized. Please provide OPENROUTER_API_KEY environment variable.');
+    }
+
+    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
+
+    if (request.systemMessage) {
+      messages.push({
+        role: 'system',
+        content: request.systemMessage,
+      });
+    }
+
+    messages.push({
+      role: 'user',
+      content: request.prompt,
+    });
+
+    const requestParams: OpenAI.Chat.Completions.ChatCompletionCreateParams = {
+      model: this.config.openrouterModel!,
+      messages,
+      max_tokens: request.maxTokens || this.config.maxTokens,
+      temperature: request.temperature || this.config.temperature,
+    };
+
+    // Add JSON format if requested and model supports it
+    if (request.format === 'json') {
+      requestParams.response_format = { type: 'json_object' };
+    }
+
+    logger.debug('Making OpenRouter API call', {
+      model: this.config.openrouterModel,
+      messagesCount: messages.length,
+      maxTokens: requestParams.max_tokens,
+      jsonFormat: !!requestParams.response_format,
+    });
+
+    const response = await this.openrouter.chat.completions.create(requestParams);
+    const content = response.choices[0]?.message?.content;
+
+    if (!content) {
+      throw new Error(`Empty response from OpenRouter model ${this.config.openrouterModel}`);
+    }
+
+    logger.debug('OpenRouter response received', {
+      model: this.config.openrouterModel,
+      tokensUsed: response.usage?.total_tokens,
+      finishReason: response.choices[0]?.finish_reason,
+    });
+
+    return {
+      content,
+      provider: 'openrouter',
+      model: this.config.openrouterModel!,
+      tokensUsed: response.usage?.total_tokens,
+      finishReason: response.choices[0]?.finish_reason || undefined,
+    };
+  }
+
+  /**
    * Generate response using Ollama
    */
   private async generateWithOllama(request: LLMRequest): Promise<LLMResponse> {
@@ -356,6 +440,7 @@ export class CentralizedLLMService {
       fallbackProvider: this.config.fallbackProvider,
       openaiModel: this.config.openaiModel,
       ollamaModel: this.config.ollamaModel,
+      openrouterModel: this.config.openrouterModel,
     });
   }
 
@@ -365,10 +450,12 @@ export class CentralizedLLMService {
   async checkProviderAvailability(): Promise<{
     openai: boolean;
     ollama: boolean;
+    openrouter: boolean;
   }> {
     const results = {
       openai: false,
       ollama: false,
+      openrouter: false,
     };
 
     // Check OpenAI
@@ -378,6 +465,16 @@ export class CentralizedLLMService {
         results.openai = true;
       } catch (error) {
         logger.debug('OpenAI not available', { error });
+      }
+    }
+
+    // Check OpenRouter
+    if (this.openrouter) {
+      try {
+        await this.openrouter.models.list();
+        results.openrouter = true;
+      } catch (error) {
+        logger.debug('OpenRouter not available', { error });
       }
     }
 
@@ -397,10 +494,12 @@ export class CentralizedLLMService {
   async getAvailableModels(): Promise<{
     openai: string[];
     ollama: string[];
+    openrouter: string[];
   }> {
     const models = {
       openai: [] as string[],
       ollama: [] as string[],
+      openrouter: [] as string[],
     };
 
     // Get OpenAI models
@@ -410,6 +509,16 @@ export class CentralizedLLMService {
         models.openai = response.data.map(model => model.id);
       } catch (error) {
         logger.debug('Failed to get OpenAI models', { error });
+      }
+    }
+
+    // Get OpenRouter models
+    if (this.openrouter) {
+      try {
+        const response = await this.openrouter.models.list();
+        models.openrouter = response.data.map(model => model.id);
+      } catch (error) {
+        logger.debug('Failed to get OpenRouter models', { error });
       }
     }
 

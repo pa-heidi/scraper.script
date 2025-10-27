@@ -1,6 +1,6 @@
 # Centralized LLM Service
 
-This document describes the centralized LLM service that provides unified access to different LLM providers (OpenAI, Ollama) across all services in the application.
+This document describes the centralized LLM service that provides unified access to different LLM providers (OpenAI, Ollama, OpenRouter) across all services in the application.
 
 ## Overview
 
@@ -20,10 +20,14 @@ The centralized LLM service ensures that:
 │  ┌─────────────────┐    ┌─────────────────────────────────┐ │
 │  │   Configuration │    │        Provider Manager        │ │
 │  │   - Primary     │    │  ┌─────────────┐ ┌─────────────┐│ │
-│  │   - Fallback    │    │  │   OpenAI    │ │   Ollama    ││ │
-│  │   - Models      │    │  │  Service    │ │  Service    ││ │
+│  │   - Fallback    │    │  │   OpenAI    │ │  OpenRouter││ │
+│  │   - Models      │    │  │  Service    │ │  Service   ││ │
 │  │   - Limits      │    │  └─────────────┘ └─────────────┘│ │
-│  └─────────────────┘    └─────────────────────────────────┘ │
+│  └─────────────────┘    │  ┌─────────────┐                │ │
+│                         │  │   Ollama    │                │ │
+│                         │  │  Service    │                │ │
+│                         │  └─────────────┘                │ │
+│                         └─────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
                                    │
                     ┌──────────────┼──────────────┐
@@ -57,10 +61,10 @@ If the primary provider fails, the service automatically tries the fallback prov
 // Configuration
 {
   primaryProvider: 'openai',
-  fallbackProvider: 'ollama'
+  fallbackProvider: 'openrouter'  // or 'ollama'
 }
 
-// If OpenAI fails, automatically tries Ollama
+// If OpenAI fails, automatically tries OpenRouter (or Ollama)
 ```
 
 ### 3. Provider Detection
@@ -68,7 +72,7 @@ The service can detect which providers are available:
 
 ```typescript
 const availability = await llmService.checkProviderAvailability();
-// { openai: true, ollama: false }
+// { openai: true, openrouter: true, ollama: false }
 ```
 
 ### 4. Model Management
@@ -76,7 +80,7 @@ Get available models from all providers:
 
 ```typescript
 const models = await llmService.getAvailableModels();
-// { openai: ['gpt-4o-mini', 'gpt-4', ...], ollama: ['llama3.2:1b', ...] }
+// { openai: ['gpt-4o-mini', 'gpt-4', ...], openrouter: ['openai/gpt-4o-mini', 'anthropic/claude-3-opus', ...], ollama: ['llama3.2:1b', ...] }
 ```
 
 ## Configuration
@@ -84,15 +88,20 @@ const models = await llmService.getAvailableModels();
 ### Environment Variables
 
 ```bash
-# Primary LLM provider (openai or ollama)
+# Primary LLM provider (openai, openrouter, or ollama)
 LLM_PRIMARY_PROVIDER=openai
 
-# Fallback LLM provider (openai or ollama)
-LLM_FALLBACK_PROVIDER=ollama
+# Fallback LLM provider (openai, openrouter, or ollama)
+LLM_FALLBACK_PROVIDER=openrouter
 
 # OpenAI Configuration
 OPENAI_API_KEY=your_openai_api_key
 OPENAI_MODEL=gpt-4o-mini
+
+# OpenRouter Configuration
+OPENROUTER_API_KEY=sk-or-your-openrouter-api-key
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=openai/gpt-4o-mini
 
 # Ollama Configuration
 OLLAMA_BASE_URL=http://localhost:11434
@@ -104,8 +113,9 @@ OLLAMA_MODEL=llama3.2:1b
 ```typescript
 const llmService = getCentralizedLLMService({
   primaryProvider: 'openai',
-  fallbackProvider: 'ollama',
+  fallbackProvider: 'openrouter',
   openaiModel: 'gpt-4o-mini',
+  openrouterModel: 'openai/gpt-4o-mini',
   ollamaModel: 'llama3.2:1b',
   maxTokens: 8000,
   temperature: 0.1
@@ -157,7 +167,13 @@ const analysis = JSON.parse(response.content);
 // Force use of specific provider
 const response = await llmService.generate({
   prompt: "Your prompt",
-  provider: "ollama" // Override default provider
+  provider: "openrouter" // Override default provider
+});
+
+// Use OpenRouter with specific models
+const llmService = getCentralizedLLMService({
+  primaryProvider: 'openrouter',
+  openrouterModel: 'anthropic/claude-3-opus' // or any OpenRouter model
 });
 ```
 
@@ -337,8 +353,8 @@ const llmService = getCentralizedLLMService();
 - `generate(request: LLMRequest): Promise<LLMResponse>`
 - `getConfig(): LLMConfig`
 - `updateConfig(config: Partial<LLMConfig>): void`
-- `checkProviderAvailability(): Promise<{openai: boolean, ollama: boolean}>`
-- `getAvailableModels(): Promise<{openai: string[], ollama: string[]}>`
+- `checkProviderAvailability(): Promise<{openai: boolean, openrouter: boolean, ollama: boolean}>`
+- `getAvailableModels(): Promise<{openai: string[], openrouter: string[], ollama: string[]}>`
 
 #### Types
 
@@ -349,21 +365,22 @@ interface LLMRequest {
   maxTokens?: number;
   temperature?: number;
   format?: 'json' | 'text';
-  provider?: 'openai' | 'ollama';
+  provider?: 'openai' | 'ollama' | 'openrouter';
 }
 
 interface LLMResponse {
   content: string;
-  provider: 'openai' | 'ollama';
+  provider: 'openai' | 'ollama' | 'openrouter';
   model: string;
   tokensUsed?: number;
   finishReason?: string;
 }
 
 interface LLMConfig {
-  primaryProvider: 'openai' | 'ollama';
-  fallbackProvider?: 'openai' | 'ollama';
+  primaryProvider: 'openai' | 'ollama' | 'openrouter';
+  fallbackProvider?: 'openai' | 'ollama' | 'openrouter';
   openaiModel?: string;
+  openrouterModel?: string;
   ollamaModel?: string;
   maxTokens?: number;
   temperature?: number;
