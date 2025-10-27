@@ -22,6 +22,7 @@ export interface ExtractedItem {
   zipcode?: number;
   images: string[]; // absolute URLs
   language: 'de' | 'en';
+  sourceUrl?: string; // URL of the page where this item was scraped from
 }
 
 export interface RetryPolicy {

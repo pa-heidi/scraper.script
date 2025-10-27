@@ -1287,6 +1287,7 @@ export class PlaywrightExecutor {
         dates: [],
         images: [],
         language: 'de', // Default language
+        sourceUrl: contentUrl, // Add the source URL
       };
 
       // Extract each field using detail selectors
