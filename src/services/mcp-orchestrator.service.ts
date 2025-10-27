@@ -217,6 +217,26 @@ export class MCPOrchestratorService implements MCPOrchestrator {
                 }
             );
 
+            // Configure LLM service based on options
+            if (options.useLocalModel !== undefined) {
+                const { getCentralizedLLMService } = await import("./centralized-llm.service");
+                const llmService = getCentralizedLLMService();
+
+                const primaryProvider = options.useLocalModel ? 'ollama' : 'openai';
+                const fallbackProvider = options.useLocalModel ? 'openai' : 'ollama';
+
+                llmService.updateConfig({
+                    primaryProvider,
+                    fallbackProvider,
+                    openaiModel: process.env.OPENAI_MODEL || "gpt-4o-mini",
+                    ollamaModel: process.env.OLLAMA_CODE_MODEL || "llama3.2:3b",
+                    maxTokens: options.maxTokens || 4000,
+                    temperature: 0.1
+                });
+
+                logger.info(`LLM provider configured: ${primaryProvider} (fallback: ${fallbackProvider})`);
+            }
+
             // Create workflow state
             const workflow = this.createWorkflow(
                 workflowId,
