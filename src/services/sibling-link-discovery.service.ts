@@ -644,11 +644,11 @@ export class SiblingLinkDiscoveryService {
                 format: "json",
                 temperature: 0.1,
                 maxTokens: 2000,
-                service: 'sibling-detection',
-                method: 'analyzeContainerStructure',
+                service: "sibling-detection",
+                method: "analyzeContainerStructure",
                 context: {
                     url: exampleUrl,
-                    step: 'container-analysis',
+                    step: "container-analysis",
                     metadata: { mainPageUrl }
                 }
             };
@@ -676,8 +676,15 @@ export class SiblingLinkDiscoveryService {
                 llmResponse.content
             );
 
-            // Step 4.1: Validate LLM selectors
-            this.validateLLMSelectors(document, analysis, exampleUrl);
+            // Step 4.1: Log LLM selectors for debugging
+            logger.debug(`🧠 LLM Analysis Results:`, {
+                exampleUrlSelector: analysis.exampleUrlSelector,
+                siblingContainerSelector: analysis.siblingContainerSelector,
+                contentLinkSelector: analysis.contentLinkSelector,
+                paginationNextSelector: analysis.paginationNextSelector,
+                confidence: analysis.confidence,
+                reasoning: analysis.reasoning
+            });
 
             // Step 5: Find the container using LLM-provided selector or heuristic fallback
             let container: Element | null = null;
@@ -1197,7 +1204,7 @@ export class SiblingLinkDiscoveryService {
     }
 
     /**
-     * Build prompt for LLM container analysis (enhanced with heuristic context)
+     * Build prompt for LLM container analysis (enhanced with heuristic context and container disambiguation)
      */
     private buildContainerAnalysisPrompt(
         exampleUrl: string,
@@ -1316,118 +1323,6 @@ ${heuristicResult?.container ? "Validate the heuristically found container and e
 `;
         console.log(prompt);
         return prompt;
-    }
-
-    /**
-     * Validate LLM selectors against the actual DOM
-     */
-    private validateLLMSelectors(
-        document: Document,
-        analysis: LLMContainerAnalysis,
-        exampleUrl: string
-    ): void {
-        logger.debug(`🔍 Validating LLM selectors...`);
-
-        // Test container selector
-        if (analysis.siblingContainerSelector) {
-            try {
-                const containerElements = document.querySelectorAll(
-                    analysis.siblingContainerSelector
-                );
-                logger.debug(
-                    `📦 Container selector "${analysis.siblingContainerSelector}" found ${containerElements.length} elements`
-                );
-            } catch (error) {
-                logger.warn(
-                    `❌ Invalid container selector: ${analysis.siblingContainerSelector}`,
-                    error
-                );
-            }
-        }
-
-        // Test example URL selector
-        if (analysis.exampleUrlSelector) {
-            try {
-                const exampleElements = document.querySelectorAll(
-                    analysis.exampleUrlSelector
-                );
-                logger.debug(
-                    `🎯 Example URL selector "${analysis.exampleUrlSelector}" found ${exampleElements.length} elements`
-                );
-
-                // Check if any of these elements actually link to the example URL
-                let foundExampleUrl = false;
-                for (const element of Array.from(exampleElements)) {
-                    const href = element.getAttribute("href");
-                    if (href) {
-                        const resolvedHref = this.resolveUrl(
-                            href,
-                            document.location?.href || ""
-                        );
-                        if (resolvedHref === exampleUrl) {
-                            foundExampleUrl = true;
-                            break;
-                        }
-                    }
-                }
-                logger.debug(
-                    `🔗 Example URL selector ${foundExampleUrl ? "DOES" : "DOES NOT"} match the actual example URL`
-                );
-            } catch (error) {
-                logger.warn(
-                    `❌ Invalid example URL selector: ${analysis.exampleUrlSelector}`,
-                    error
-                );
-            }
-        }
-
-        // Test content link selector
-        if (analysis.contentLinkSelector) {
-            try {
-                const contentElements = document.querySelectorAll(
-                    analysis.contentLinkSelector
-                );
-                logger.debug(
-                    `🔗 Content link selector "${analysis.contentLinkSelector}" found ${contentElements.length} elements`
-                );
-
-                // Show sample hrefs
-                if (contentElements.length > 0) {
-                    const sampleHrefs = Array.from(contentElements)
-                        .slice(0, 3)
-                        .map((el) => el.getAttribute("href"))
-                        .filter(Boolean);
-                    logger.debug(`📋 Sample content links:`, sampleHrefs);
-                }
-            } catch (error) {
-                logger.warn(
-                    `❌ Invalid content link selector: ${analysis.contentLinkSelector}`,
-                    error
-                );
-            }
-        }
-
-        // Test pagination next selector
-        if (analysis.paginationNextSelector) {
-            try {
-                const paginationElements = document.querySelectorAll(
-                    analysis.paginationNextSelector
-                );
-                logger.debug(
-                    `📄 Pagination next selector "${analysis.paginationNextSelector}" found ${paginationElements.length} elements`
-                );
-
-                if (paginationElements.length > 0) {
-                    const nextHref = paginationElements[0].getAttribute("href");
-                    logger.debug(`➡️ Next page link: ${nextHref}`);
-                }
-            } catch (error) {
-                logger.warn(
-                    `❌ Invalid pagination next selector: ${analysis.paginationNextSelector}`,
-                    error
-                );
-            }
-        }
     }
 
     /**
@@ -2520,11 +2415,11 @@ Respond with JSON only:
             format: "json" as const,
             temperature: 0.1,
             maxTokens: 1000,
-            service: 'pagination-detection',
-            method: 'analyzePaginationStructure',
+            service: "pagination-detection",
+            method: "analyzePaginationStructure",
             context: {
                 url: baseUrl,
-                step: 'pagination-analysis'
+                step: "pagination-analysis"
             }
         };
 
@@ -2673,11 +2568,11 @@ Respond with JSON only:
             format: "json" as const,
             temperature: 0.1,
             maxTokens: 800,
-            service: 'pagination-detection',
-            method: 'analyzeNextPageSelector',
+            service: "pagination-detection",
+            method: "analyzeNextPageSelector",
             context: {
                 url: baseUrl,
-                step: 'next-page-selector-analysis'
+                step: "next-page-selector-analysis"
             }
         };
 
