@@ -396,7 +396,7 @@ export class PlaywrightExecutor {
     // Get testing limits from options
     const testMode = options?.testMode ?? false;
     const maxPages = testMode ? (options?.maxPages ?? 2) : (options?.maxPages ?? 50);
-    const maxItemsPerPage = testMode ? (options?.maxItemsPerPage ?? 2) : undefined;
+    const maxItemsPerPage = testMode ? (options?.maxItemsPerPage ?? options?.maxItems ?? 2) : (options?.maxItemsPerPage ?? options?.maxItems);
 
     logger.info(`🔍 Starting to process entry URL: ${entryUrl}`, {
       testMode,

@@ -826,7 +826,8 @@ export class MCPOrchestratorService implements MCPOrchestrator {
                     const scrapingResult =
                         await this.playwrightExecutor.executePlan(
                             plan.plan,
-                            runId
+                            runId,
+                            developmentOptions
                         );
 
                     // Convert ScrapingResult to ExecutionResult
