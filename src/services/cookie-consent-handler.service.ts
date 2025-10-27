@@ -628,6 +628,7 @@ export class CookieConsentHandler {
         '[role="dialog"]',       // NEW
         '[aria-modal="true"]',   // NEW
         '.cookie-banner',
+        '.cookie-banner-container',
         '.consent-banner',
         '.cookie-notice',
         '.privacy-notice',
@@ -811,6 +812,7 @@ export class CookieConsentHandler {
           'akzeptieren', 'alle akzeptieren', 'zustimmen', 'alle zustimmen',
           'akzeptiere alle', 'alle cookies akzeptieren', 'cookies akzeptieren',
           'alle auswählen', 'alle erlauben', 'alle zulassen', // NEW
+          'alle cookies zulassen', 'auswahl bestätigen', // gera.de specific
           // English
           'accept all', 'accept all cookies', 'allow all', 'allow all cookies',
           'accept', 'agree', 'i agree', 'i accept',
@@ -822,6 +824,7 @@ export class CookieConsentHandler {
           'ablehnen', 'alle ablehnen', 'verweigern', 'alle verweigern',
           'ablehne alle', 'nur notwendige', 'nur erforderliche',
           'alle abwählen', 'nicht zustimmen', // NEW
+          'nur notwendige cookies zulassen', // gera.de specific
           // English
           'reject all', 'reject all cookies', 'decline all', 'decline',
           'reject', 'disagree', 'i disagree', 'necessary only',
@@ -855,6 +858,22 @@ export class CookieConsentHandler {
       // Find all buttons within the dialog
       const allButtons = await dialogElement.$$(buttonSelectors.join(', '));
 
+      // If no buttons found in dialog, try to find them in the page (they might be outside the dialog container)
+      if (allButtons.length === 0) {
+        logger.debug('No buttons found in dialog element, searching entire page...');
+        const pageButtons = await page.$$(buttonSelectors.join(', '));
+        // Filter buttons that are likely part of the cookie consent
+        for (const button of pageButtons) {
+          const buttonText = await button.textContent();
+          if (buttonText && this.containsCookieKeywords(buttonText)) {
+            allButtons.push(button);
+          }
+        }
+        logger.debug(`Found ${allButtons.length} potential cookie consent buttons on page`);
+      }
+
+      logger.debug(`Processing ${allButtons.length} buttons for cookie consent`);
+
       for (const button of allButtons) {
         try {
           // Check if button is truly visible (not in a hidden container)
@@ -867,12 +886,13 @@ export class CookieConsentHandler {
                    (el as HTMLElement).offsetHeight > 0;
           });
 
-          if (!isButtonVisible) continue;
-
           const buttonText = await button.textContent();
           const buttonClass = await button.getAttribute('class') || '';
           const buttonId = await button.getAttribute('id') || '';
 
+          logger.debug(`Button found: text="${buttonText}", class="${buttonClass}", id="${buttonId}", visible=${isButtonVisible}`);
+
+          if (!isButtonVisible) continue;
           if (!buttonText) continue;
 
           const normalizedText = buttonText.toLowerCase().trim();
