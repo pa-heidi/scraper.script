@@ -477,13 +477,17 @@ export class MCPOrchestratorService implements MCPOrchestrator {
                         }
 
                         // For list selector, prioritize contentLinkSelector over containerSignature
-                        // contentLinkSelector is more precise and targets actual links
-                        if (bestSiblingResult.metadata?.contentLinkSelector) {
-                            listSelector = bestSiblingResult.metadata.contentLinkSelector;
-                            logger.info("🎯 Using contentLinkSelector as listSelector for precise link targeting");
+                        // Use specific container selector for list targeting (enhanced analysis)
+                        if (bestSiblingResult.metadata?.specificContainerSelector) {
+                            listSelector = bestSiblingResult.metadata.specificContainerSelector;
+                            logger.info("🎯 Using specificContainerSelector as listSelector for precise container targeting");
                         } else if (bestSiblingResult.metadata?.containerSignature) {
                             listSelector = bestSiblingResult.metadata.containerSignature;
                             logger.info("📦 Using containerSignature as listSelector (fallback)");
+                        } else if (bestSiblingResult.metadata?.contentLinkSelector) {
+                            // Last resort: use content link selector but this might not work well for container targeting
+                            listSelector = bestSiblingResult.metadata.contentLinkSelector;
+                            logger.warn("⚠️ Using contentLinkSelector as listSelector (may not work well for container targeting)");
                         }
 
                         logger.info(
@@ -492,6 +496,7 @@ export class MCPOrchestratorService implements MCPOrchestrator {
                                 listSelector,
                                 paginationSelector,
                                 contentLinkSelector: bestSiblingResult.metadata?.contentLinkSelector,
+                                specificContainerSelector: bestSiblingResult.metadata?.specificContainerSelector,
                                 containerSignature: bestSiblingResult.metadata?.containerSignature,
                                 confidence: bestSiblingResult.confidence,
                                 method: bestSiblingResult.discoveryMethod

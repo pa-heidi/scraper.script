@@ -29,6 +29,7 @@ export interface SiblingLinkResult {
         paginationLinks?: string[];
         paginationNextSelector?: string; // NEW: Store the selector for next page
         contentLinkSelector?: string; // NEW: Store the selector for content links
+        specificContainerSelector?: string; // NEW: Store the specific container selector from enhanced analysis
         isPaginated?: boolean;
         totalPages?: number;
     };
@@ -560,6 +561,8 @@ export class SiblingLinkDiscoveryService {
                     paginationLinks,
                     paginationNextSelector: llmAnalysis?.paginationNextSelector,
                     contentLinkSelector: llmAnalysis?.contentLinkSelector, // NEW: Add content link selector for plan generation
+                    specificContainerSelector:
+                        llmAnalysis?.siblingContainerSelector, // NEW: Add specific container selector from LLM
                     isPaginated: paginationLinks.length > 0,
                     totalPages:
                         paginationLinks.length > 0
@@ -676,8 +679,23 @@ export class SiblingLinkDiscoveryService {
                 llmResponse.content
             );
 
-            // Step 4.1: Log LLM selectors for debugging
-            logger.debug(`🧠 LLM Analysis Results:`, {
+            // Step 4.1: Sanitize and log LLM selectors
+            analysis.siblingContainerSelector = this.sanitizeSelector(
+                analysis.siblingContainerSelector
+            );
+            analysis.contentLinkSelector = this.sanitizeSelector(
+                analysis.contentLinkSelector
+            );
+            analysis.exampleUrlSelector = this.sanitizeSelector(
+                analysis.exampleUrlSelector
+            );
+            if (analysis.paginationNextSelector) {
+                analysis.paginationNextSelector = this.sanitizeSelector(
+                    analysis.paginationNextSelector
+                );
+            }
+
+            logger.debug(`🧠 LLM Analysis Results (sanitized):`, {
                 exampleUrlSelector: analysis.exampleUrlSelector,
                 siblingContainerSelector: analysis.siblingContainerSelector,
                 contentLinkSelector: analysis.contentLinkSelector,
@@ -769,6 +787,9 @@ export class SiblingLinkDiscoveryService {
         containerPath: string;
         confidence: number;
         siblingCount: number;
+        containerOrder?: number; // NEW: Order of this container among similar containers
+        similarContainers?: Element[]; // NEW: All containers with same class
+        specificSelector?: string; // NEW: Most specific selector for this exact container
     }> {
         try {
             // Step 1: Find the example URL link in the HTML
@@ -802,7 +823,10 @@ export class SiblingLinkDiscoveryService {
                     exampleLinkElement: null,
                     containerPath: "",
                     confidence: 0,
-                    siblingCount: 0
+                    siblingCount: 0,
+                    containerOrder: undefined,
+                    similarContainers: undefined,
+                    specificSelector: undefined
                 };
             }
             logger.debug("Found example URL link element", {
@@ -828,19 +852,34 @@ export class SiblingLinkDiscoveryService {
                     exampleUrl,
                     mainPageUrl
                 );
+
+                // NEW: Analyze similar containers and determine order
+                const containerAnalysis = this.analyzeContainerOrder(
+                    document,
+                    containerResult
+                );
+
                 logger.debug("Heuristic container analysis completed", {
                     containerTag: containerResult.tagName,
                     containerClass: containerResult.className,
                     containerPath,
                     confidence: confidence.toFixed(3),
-                    siblingCount
+                    siblingCount,
+                    containerOrder: containerAnalysis.order,
+                    similarContainersCount:
+                        containerAnalysis.similarContainers.length,
+                    specificSelector: containerAnalysis.specificSelector
                 });
+
                 return {
                     container: containerResult,
                     exampleLinkElement,
                     containerPath,
                     confidence,
-                    siblingCount
+                    siblingCount,
+                    containerOrder: containerAnalysis.order,
+                    similarContainers: containerAnalysis.similarContainers,
+                    specificSelector: containerAnalysis.specificSelector
                 };
             }
             return {
@@ -848,7 +887,10 @@ export class SiblingLinkDiscoveryService {
                 exampleLinkElement,
                 containerPath: "",
                 confidence: 0,
-                siblingCount: 0
+                siblingCount: 0,
+                containerOrder: undefined,
+                similarContainers: undefined,
+                specificSelector: undefined
             };
         } catch (error) {
             logger.error("Error in heuristic container search:", error);
@@ -857,9 +899,221 @@ export class SiblingLinkDiscoveryService {
                 exampleLinkElement: null,
                 containerPath: "",
                 confidence: 0,
-                siblingCount: 0
+                siblingCount: 0,
+                containerOrder: undefined,
+                similarContainers: undefined,
+                specificSelector: undefined
             };
         }
+    }
+
+    /**
+     * Analyze container order among similar containers and generate specific selector
+     */
+    private analyzeContainerOrder(
+        document: Document,
+        targetContainer: Element
+    ): {
+        order: number;
+        similarContainers: Element[];
+        specificSelector: string;
+    } {
+        // Find all containers with the same class(es) as the target
+        const targetClasses = targetContainer.className
+            .trim()
+            .split(/\s+/)
+            .filter((cls) => cls.length > 0);
+        let similarContainers: Element[] = [];
+
+        if (targetClasses.length > 0) {
+            // Try to find containers with the same primary class
+            const primaryClass = targetClasses[0];
+            similarContainers = Array.from(
+                document.querySelectorAll(`.${primaryClass}`)
+            ).filter(
+                (el) =>
+                    el.tagName.toLowerCase() ===
+                    targetContainer.tagName.toLowerCase()
+            );
+
+            logger.debug(
+                `Found ${similarContainers.length} containers with class "${primaryClass}"`
+            );
+        }
+
+        // Determine the order of our target container
+        const order = similarContainers.indexOf(targetContainer) + 1; // 1-based index
+
+        // Generate the most specific selector for this container
+        let specificSelector = this.generateSpecificSelector(
+            document,
+            targetContainer,
+            similarContainers
+        );
+
+        logger.debug(`Container analysis:`, {
+            targetClasses,
+            similarContainersCount: similarContainers.length,
+            order,
+            specificSelector
+        });
+
+        return {
+            order,
+            similarContainers,
+            specificSelector
+        };
+    }
+
+    /**
+     * Validate and sanitize CSS selector to ensure it works in Playwright
+     */
+    private sanitizeSelector(selector: string): string {
+        if (!selector || selector.trim() === "") {
+            return selector;
+        }
+
+        let sanitized = selector.trim();
+
+        // Fix invalid ID selectors (IDs starting with numbers or containing invalid chars)
+        sanitized = sanitized.replace(/#(\d[a-zA-Z0-9]*)/g, (match, id) => {
+            // ID starts with number - make it valid by prefixing with 'id'
+            logger.debug(
+                `Sanitizing invalid ID selector: ${match} -> #id${id}`
+            );
+            return `#id${id}`;
+        });
+
+        // Remove clearly invalid patterns
+        sanitized = sanitized.replace(/#\[[^\]]*\]/g, ""); // Remove #[...] patterns
+
+        return sanitized;
+    }
+
+    /**
+     * Generate the most specific selector for a container among similar containers
+     */
+    private generateSpecificSelector(
+        document: Document,
+        targetContainer: Element,
+        similarContainers: Element[]
+    ): string {
+        // If there's only one container, use simple class selector
+        if (similarContainers.length <= 1) {
+            const classes = targetContainer.className
+                .trim()
+                .split(/\s+/)
+                .filter((cls) => cls.length > 0);
+            return classes.length > 0
+                ? `.${classes.join(".")}`
+                : targetContainer.tagName.toLowerCase();
+        }
+
+        // Try ID first (most specific) - but sanitize it
+        if (targetContainer.id) {
+            const idSelector = `#${targetContainer.id}`;
+            const sanitizedSelector = this.sanitizeSelector(idSelector);
+
+            // Test if the sanitized selector works
+            try {
+                const testElements =
+                    document.querySelectorAll(sanitizedSelector);
+                if (
+                    testElements.length === 1 &&
+                    testElements[0] === targetContainer
+                ) {
+                    return sanitizedSelector;
+                }
+            } catch (error) {
+                logger.debug(
+                    `Sanitized ID selector failed: ${sanitizedSelector}`,
+                    error
+                );
+            }
+        }
+
+        // Try unique attribute combinations
+        const attributes = Array.from(targetContainer.attributes);
+        for (const attr of attributes) {
+            if (attr.name === "data-section" || attr.name.startsWith("data-")) {
+                const selector = `${targetContainer.tagName.toLowerCase()}[${attr.name}="${attr.value}"]`;
+                const matches = document.querySelectorAll(selector);
+                if (matches.length === 1 && matches[0] === targetContainer) {
+                    return selector;
+                }
+            }
+        }
+
+        // Try parent context + class
+        const parent = targetContainer.parentElement;
+        if (parent) {
+            const parentSelector = this.generateParentContextSelector(
+                document,
+                parent
+            );
+            if (parentSelector) {
+                const classes = targetContainer.className
+                    .trim()
+                    .split(/\s+/)
+                    .filter((cls) => cls.length > 0);
+                const classSelector =
+                    classes.length > 0
+                        ? `.${classes.join(".")}`
+                        : targetContainer.tagName.toLowerCase();
+                return `${parentSelector} > ${classSelector}`;
+            }
+        }
+
+        // Fallback to nth-child if we have multiple similar containers
+        const order = similarContainers.indexOf(targetContainer) + 1;
+        const classes = targetContainer.className
+            .trim()
+            .split(/\s+/)
+            .filter((cls) => cls.length > 0);
+        const baseSelector =
+            classes.length > 0
+                ? `.${classes.join(".")}`
+                : targetContainer.tagName.toLowerCase();
+
+        const finalSelector = `${baseSelector}:nth-of-type(${order})`;
+        return this.sanitizeSelector(finalSelector);
+    }
+
+    /**
+     * Generate a selector for parent context
+     */
+    private generateParentContextSelector(
+        document: Document,
+        parent: Element
+    ): string | null {
+        // Try ID first
+        if (parent.id) {
+            return `#${parent.id}`;
+        }
+
+        // Try data attributes
+        const attributes = Array.from(parent.attributes);
+        for (const attr of attributes) {
+            if (attr.name === "data-section" || attr.name.startsWith("data-")) {
+                return `${parent.tagName.toLowerCase()}[${attr.name}="${attr.value}"]`;
+            }
+        }
+
+        // Try unique class combinations
+        const classes = parent.className
+            .trim()
+            .split(/\s+/)
+            .filter((cls) => cls.length > 0);
+        if (classes.length > 0) {
+            const selector = `.${classes.join(".")}`;
+            // Only use if it's reasonably specific (not too many matches)
+            const matches = document.querySelectorAll(selector);
+            if (matches.length <= 3) {
+                return selector;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -945,27 +1199,60 @@ export class SiblingLinkDiscoveryService {
                         allLinksInContainer.map((link) => [link.href, link])
                     ).values()
                 );
-                logger.debug(
-                    `  🔗 Content links in container: ${linksInContainer.length}`
-                );
-                // Prefer containers with 3-100 content links (not too few, not too many)
-                if (
-                    linksInContainer.length >= 3 &&
-                    linksInContainer.length <= 100
-                ) {
-                    logger.debug(
-                        `  ✅ Container has reasonable number of content links (${linksInContainer.length})`
+
+                // Calculate URL similarity to example URL for this container
+                const similarLinks = linksInContainer.filter((link) => {
+                    const similarity = this.calculateUrlSimilarity(
+                        link.href,
+                        exampleUrl
                     );
-                    if (containerScore > bestScore) {
-                        bestScore = containerScore;
+                    return similarity >= 0.5; // Similar URLs
+                });
+
+                logger.debug(
+                    `  🔗 Content links in container: ${linksInContainer.length}, similar to example: ${similarLinks.length}`
+                );
+
+                // Prefer containers with:
+                // 1. 2-20 content links (focused containers)
+                // 2. High similarity to example URL
+                // 3. Good container score
+                const hasReasonableSize =
+                    linksInContainer.length >= 2 &&
+                    linksInContainer.length <= 20;
+                const hasSimilarContent = similarLinks.length >= 1;
+                const isSpecific =
+                    current.className.includes("teaser") ||
+                    current.className.includes("list") ||
+                    current.className.includes("article");
+
+                if (hasReasonableSize && hasSimilarContent) {
+                    // Boost score for more specific containers
+                    let adjustedScore = containerScore;
+                    if (isSpecific) {
+                        adjustedScore += 0.3; // Boost for specific container classes
+                    }
+                    if (similarLinks.length > linksInContainer.length * 0.5) {
+                        adjustedScore += 0.2; // Boost for high similarity ratio
+                    }
+                    if (linksInContainer.length <= 10) {
+                        adjustedScore += 0.1; // Boost for focused containers
+                    }
+
+                    logger.debug(
+                        `  ✅ Container qualifies: ${linksInContainer.length} links, ${similarLinks.length} similar, score: ${adjustedScore.toFixed(3)}`
+                    );
+
+                    if (adjustedScore > bestScore) {
+                        bestScore = adjustedScore;
                         bestContainer = current;
                         logger.debug(
-                            `  🏆 New best container with score ${containerScore.toFixed(3)}`
+                            `  🏆 New best container with adjusted score ${adjustedScore.toFixed(3)}`
                         );
                     }
                 } else {
                     logger.debug(
-                        `  ❌ Container has too few/too many content links (${linksInContainer.length})`
+                        `  ❌ Container doesn't qualify: size=${hasReasonableSize}, similar=${hasSimilarContent}, links=${linksInContainer.length}`
                     );
                 }
             } else {
@@ -1217,18 +1504,34 @@ export class SiblingLinkDiscoveryService {
             containerPath: string;
             confidence: number;
             siblingCount: number;
+            containerOrder?: number;
+            similarContainers?: Element[];
+            specificSelector?: string;
         }
     ): string {
         let heuristicContext = "";
         if (heuristicResult && heuristicResult.container) {
+            const containerOrderInfo =
+                heuristicResult.containerOrder &&
+                heuristicResult.similarContainers &&
+                heuristicResult.similarContainers.length > 1
+                    ? `
+- Container order: ${heuristicResult.containerOrder} of ${heuristicResult.similarContainers.length} similar containers
+- Specific selector: ${heuristicResult.specificSelector}
+- Multiple similar containers detected - use specific selector to target this exact container`
+                    : `
+- Single container found (no similar containers)
+- Container selector: ${heuristicResult.specificSelector || heuristicResult.containerPath}`;
+
             heuristicContext = `
 HEURISTIC ANALYSIS RESULTS:
 - Found container: ${heuristicResult.containerPath}
 - Container confidence: ${heuristicResult.confidence.toFixed(2)}
 - Sibling links found: ${heuristicResult.siblingCount}
-- Example URL was located in the HTML
+- Example URL was located in the HTML${containerOrderInfo}
 
-The heuristic search has already identified a likely container. Please validate and enhance this analysis.
+The heuristic search has already identified the specific container containing the example URL.
+${heuristicResult.specificSelector ? `Use the specific selector "${heuristicResult.specificSelector}" to target this exact container.` : "Please validate and enhance this analysis."}
 `;
         } else {
             heuristicContext = `
@@ -1259,11 +1562,13 @@ Find:
 3. A CSS selector for the "next page" button/link for pagination (if any)
 
 CRITICAL REQUIREMENTS:
+- If heuristic analysis provided a specific selector, USE IT for the siblingContainerSelector
 - contentLinkSelector should target the MAIN/PRIMARY link of each content item (usually title link)
 - Avoid selectors that pick up multiple links per content item (image links, button links, etc.)
 - Exclude pagination, navigation, and menu links from content selectors
 - Ensure each content item contributes only ONE unique link to avoid duplicates
 - Focus on providing SELECTORS that can be used to extract content, not the actual URLs
+- When multiple similar containers exist, use the most specific selector to target the exact container
 
 Respond with JSON:
 {

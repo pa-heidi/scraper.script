@@ -91,6 +91,13 @@ export interface CookieConsentStep {
 export class CookieConsentHandler {
   private config: CookieConsentConfig;
 
+  // NEW: Domain-level consent cache to avoid redundant checks
+  private domainConsentCache = new Map<string, {
+    result: ConsentHandlingResult;
+    timestamp: number;
+    ttl: number; // Time to live in milliseconds
+  }>();
+
   constructor(config?: Partial<CookieConsentConfig>) {
     this.config = {
       strategy: (process.env.COOKIE_CONSENT_STRATEGY as any) || 'accept-all',
@@ -100,6 +107,66 @@ export class CookieConsentHandler {
       fallbackStrategy: 'continue',
       ...config,
     };
+  }
+
+  /**
+   * Extract domain from URL for caching
+   */
+  private extractDomain(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      return urlObj.hostname;
+    } catch (error) {
+      logger.warn(`Failed to extract domain from URL: ${url}`, error);
+      return url; // Fallback to full URL
+    }
+  }
+
+  /**
+   * Check if domain consent is cached and still valid
+   */
+  private getCachedDomainConsent(domain: string): ConsentHandlingResult | null {
+    const cached = this.domainConsentCache.get(domain);
+    if (!cached) {
+      return null;
+    }
+
+    const now = Date.now();
+    if (now - cached.timestamp > cached.ttl) {
+      // Cache expired
+      this.domainConsentCache.delete(domain);
+      logger.debug(`Domain consent cache expired for ${domain}`);
+      return null;
+    }
+
+    logger.info(`🍪 Using cached consent result for domain: ${domain}`);
+    return cached.result;
+  }
+
+  /**
+   * Cache domain consent result
+   */
+  private cacheDomainConsent(domain: string, result: ConsentHandlingResult, ttlMinutes: number = 60): void {
+    const ttl = ttlMinutes * 60 * 1000; // Convert to milliseconds
+    this.domainConsentCache.set(domain, {
+      result,
+      timestamp: Date.now(),
+      ttl
+    });
+    logger.debug(`Cached consent result for domain: ${domain} (TTL: ${ttlMinutes} minutes)`);
+  }
+
+  /**
+   * Clear domain consent cache (useful for testing or when consent changes)
+   */
+  public clearDomainCache(domain?: string): void {
+    if (domain) {
+      this.domainConsentCache.delete(domain);
+      logger.debug(`Cleared consent cache for domain: ${domain}`);
+    } else {
+      this.domainConsentCache.clear();
+      logger.debug(`Cleared all domain consent cache`);
+    }
   }
 
   /**
@@ -206,22 +273,38 @@ export class CookieConsentHandler {
     const finalConfig = { ...this.config, ...config };
 
     try {
+      // NEW: Check domain-level cache first
+      const domain = this.extractDomain(url);
+      const cachedResult = this.getCachedDomainConsent(domain);
+      if (cachedResult) {
+        logger.info(`🍪 Using cached consent result for ${url} (domain: ${domain})`);
+        return {
+          ...cachedResult,
+          duration: Date.now() - startTime // Update duration for this call
+        };
+      }
+
       logger.debug(`🍪 Checking for cookie consent dialog on ${url}`);
 
       // Detect if there's a cookie dialog
       const hasDialog = await this.detectCookieDialog(page);
       if (!hasDialog) {
         logger.debug(`No cookie consent dialog detected on ${url}`);
-        return {
+        const noDialogResult = {
           success: true,
-          method: 'none',
+          method: 'none' as const,
           duration: Date.now() - startTime,
           metadata: {
             detected: false,
-            strategy: 'none-detected',
+            strategy: 'none-detected' as const,
             handledAt: new Date()
           }
         };
+
+        // Cache the "no dialog" result for this domain
+        this.cacheDomainConsent(domain, noDialogResult, 60);
+
+        return noDialogResult;
       }
 
       logger.info(`🍪 Detected cookie consent dialog on ${url}`);
@@ -233,17 +316,22 @@ export class CookieConsentHandler {
       const dialogResult = await this.getCookieDialogElement(page);
       if (!dialogResult) {
         logger.warn(`Cookie dialog detected but no dialog element found on ${url}`);
-        return {
+        const noElementResult = {
           success: false,
-          method: 'none',
+          method: 'none' as const,
           error: 'Dialog element not found',
           duration: Date.now() - startTime,
           metadata: {
             detected: true,
-            strategy: 'none-detected',
+            strategy: 'none-detected' as const,
             handledAt: new Date()
           }
         };
+
+        // Cache the failed result for this domain (shorter TTL)
+        this.cacheDomainConsent(domain, noElementResult, 10); // Cache for 10 minutes only
+
+        return noElementResult;
       }
 
       // Detect cookie consent library
@@ -411,21 +499,29 @@ export class CookieConsentHandler {
         llmVerified: !!result.metadata.llmVerification
       });
 
+      // NEW: Cache the result at domain level for future requests
+      this.cacheDomainConsent(domain, result, 60); // Cache for 60 minutes
+
       return result;
 
     } catch (error) {
       logger.error(`❌ Error handling cookie consent on ${url}:`, error);
-      return {
+      const errorResult = {
         success: false,
-        method: 'none',
+        method: 'none' as const,
         error: error instanceof Error ? error.message : String(error),
         duration: Date.now() - startTime,
         metadata: {
           detected: false,
-          strategy: 'none-detected',
+          strategy: 'none-detected' as const,
           handledAt: new Date()
         }
       };
+
+      // Cache error result for shorter time to allow retry
+      this.cacheDomainConsent(this.extractDomain(url), errorResult, 5); // Cache for 5 minutes only
+
+      return errorResult;
     }
   }
 
