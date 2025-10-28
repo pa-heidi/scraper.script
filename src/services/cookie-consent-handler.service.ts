@@ -969,26 +969,71 @@ export class CookieConsentHandler {
         return `#${id}`;
       }
 
+      // Get button text for more specific selectors
+      const text = await button.textContent();
+      const normalizedText = text ? text.trim() : '';
+
+      // Try to create a text-based selector first (most specific)
+      if (normalizedText) {
+        const tagName = await button.evaluate((el: Element) => el.tagName.toLowerCase());
+
+        // For cookie consent buttons, use text-based selectors to avoid conflicts
+        if (normalizedText.toLowerCase().includes('cookie') ||
+            normalizedText.toLowerCase().includes('zulassen') ||
+            normalizedText.toLowerCase().includes('akzeptieren') ||
+            normalizedText.toLowerCase().includes('ablehnen') ||
+            normalizedText.toLowerCase().includes('notwendige')) {
+          return `${tagName}:has-text("${normalizedText}")`;
+        }
+      }
+
+      // Try class-based selector with context
       const className = await button.getAttribute('class');
       if (className) {
         const classes = className.split(' ').filter(c => c.trim());
         if (classes.length > 0) {
-          // Use the most specific class (longest one)
-          const mostSpecificClass = classes.reduce((longest, current) =>
-            current.length > longest.length ? current : longest
-          );
-          return `.${mostSpecificClass}`;
+          // If multiple classes, try to create a more specific selector
+          if (classes.length > 1) {
+            // Combine multiple classes for specificity
+            const combinedClasses = classes.slice(0, 3).join('.');
+
+            // Add parent context if the selector might be too generic
+            if (classes.some(c => ['btn', 'button', 'text-nowrap'].includes(c))) {
+              // Try to get parent context for more specificity
+              try {
+                const parentClass = await button.evaluate((el: Element) => {
+                  const parent = el.parentElement;
+                  return parent ? parent.className : '';
+                });
+
+                if (parentClass && parentClass.includes('cookie')) {
+                  return `.${parentClass.split(' ')[0]} .${combinedClasses}`;
+                }
+              } catch (e) {
+                // Continue with fallback
+              }
+            }
+
+            return `.${combinedClasses}`;
+          } else {
+            // Single class - use it but add text context if generic
+            const singleClass = classes[0];
+            if (['btn', 'button', 'text-nowrap'].includes(singleClass) && normalizedText) {
+              const tagName = await button.evaluate((el: Element) => el.tagName.toLowerCase());
+              return `${tagName}.${singleClass}:has-text("${normalizedText}")`;
+            }
+            return `.${singleClass}`;
+          }
         }
       }
 
-      // Try to get a more specific selector using text content
-      const text = await button.textContent();
-      if (text && text.trim()) {
+      // Fallback to text-based selector
+      if (normalizedText) {
         const tagName = await button.evaluate((el: Element) => el.tagName.toLowerCase());
-        return `${tagName}:has-text("${text.trim()}")`;
+        return `${tagName}:has-text("${normalizedText}")`;
       }
 
-      // Fallback to tag name
+      // Final fallback to tag name
       const tagName = await button.evaluate((el: Element) => el.tagName.toLowerCase());
       return tagName;
     } catch (error) {
