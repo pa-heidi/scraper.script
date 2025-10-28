@@ -1626,7 +1626,7 @@ Then the selectors should be:
 
 ${heuristicResult?.container ? "Validate the heuristically found container and enhance the analysis." : "Perform comprehensive search since heuristics failed."}
 `;
-        console.log(prompt);
+
         return prompt;
     }
 
