@@ -1306,12 +1306,6 @@ export class MCPOrchestratorService implements MCPOrchestrator {
             // Check Redis connection
             await this.redisClient.ping();
 
-            // Check active workflows
-            const activeCount = this.activeWorkflows.size;
-
-            logger.debug("Health check passed", {
-                activeWorkflows: activeCount
-            });
         } catch (error) {
             logger.error("Health check failed:", error);
         }
