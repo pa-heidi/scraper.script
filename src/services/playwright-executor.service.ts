@@ -897,8 +897,8 @@ export class PlaywrightExecutor {
 
     while (this.availableBrowsers.length === 0 && !this.isShuttingDown && waitTime < maxWaitTime) {
       logger.debug(`⏳ Waiting for available browser... (waited ${waitTime}ms)`);
-      await new Promise(resolve => setTimeout(resolve, 100));
-      waitTime += 100;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      waitTime += 1000;
     }
 
     if (waitTime >= maxWaitTime) {

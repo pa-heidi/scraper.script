@@ -577,7 +577,8 @@ export class CookieConsentHandler {
         '[class*="disclaimer"]',
         '[role="dialog"]',
         '.cookie-banner',
-        '.consent-banner'
+        '.consent-banner',
+        '.cookie-banner-container'
       ];
 
       // Wait for any cookie dialog to appear (up to 3 seconds)
@@ -590,21 +591,27 @@ export class CookieConsentHandler {
         // No dialog found within timeout, continue with keyword check
       }
 
+      // Confidence-based detection: evaluate all candidates and pick the best one
+      let bestConfidence = 0;
+
       for (const selector of overlaySelectors) {
         const elements = await page.$$(selector);
         for (const element of elements) {
           const isVisible = await element.isVisible();
-          if (isVisible) {
-            // Check if it's likely a cookie dialog based on position and content
-            const boundingBox = await element.boundingBox();
-            if (boundingBox && await this.isLikelyCookieDialog(element, boundingBox)) {
-              return true;
-            }
+          if (!isVisible) continue;
+
+          const boundingBox = await element.boundingBox();
+          if (!boundingBox) continue;
+
+          const confidence = await this.scoreCookieDialogCandidate(element, selector, boundingBox);
+          if (confidence > bestConfidence) {
+            bestConfidence = confidence;
           }
         }
       }
 
-      return false;
+      // Consider detected if confidence is reasonably high
+      return bestConfidence >= 50;
     } catch (error) {
       logger.debug(`Error detecting cookie dialog:`, error);
       return false;
@@ -620,6 +627,7 @@ export class CookieConsentHandler {
       const dialogSelectors = [
         '[class*="cookie"][class*="dialog"]',
         '[class*="cookie"][class*="banner"]',
+        '.cookie-banner-container',
         '[class*="consent"][class*="dialog"]',
         '[class*="consent"][class*="banner"]',
         '[class*="disclaimer"]', // NEW
@@ -648,12 +656,14 @@ export class CookieConsentHandler {
         'div:has-text("DISCLAIMER")',
       ];
 
+      // Confidence-based selection among dialog candidates
+      let best: { element: ElementHandle; selector: string; confidence: number } | null = null;
+
       for (const selector of dialogSelectors) {
         try {
           const elements = await page.$$(selector);
           for (const element of elements) {
             const isVisible = await element.isVisible();
-            // Additional check for computed styles to ensure element is truly visible
             const isReallyVisible = await element.evaluate((el: Element) => {
               const style = window.getComputedStyle(el);
               return style.display !== 'none' &&
@@ -663,46 +673,109 @@ export class CookieConsentHandler {
                      (el as HTMLElement).offsetHeight > 0;
             });
 
-            if (isVisible && isReallyVisible) {
-              // Additional check: ensure it's likely a dialog
-              const boundingBox = await element.boundingBox();
-              if (boundingBox && await this.isLikelyCookieDialog(element, boundingBox)) {
-                logger.debug(`Found cookie dialog element with selector: ${selector}`);
-                return { element, selector };
-              }
+            if (!isVisible || !isReallyVisible) continue;
+
+            const boundingBox = await element.boundingBox();
+            if (!boundingBox) continue;
+
+            const confidence = await this.scoreCookieDialogCandidate(element, selector, boundingBox);
+            if (!best || confidence > best.confidence) {
+              best = { element, selector, confidence };
             }
           }
         } catch (selectorError) {
-          // Some selectors might not be supported, continue with next
           logger.debug(`Selector ${selector} failed:`, selectorError);
         }
       }
 
+      if (best) {
+        logger.debug(`Found cookie dialog element with selector: ${best.selector} (confidence=${Math.round(best.confidence)})`);
+        return { element: best.element, selector: best.selector };
+      }
+
       // Fallback: look for any visible overlay that might be a cookie dialog
+      // Fallback search with confidence scoring
       const allElements = await page.$$('div, section, aside, dialog');
+      let fallbackBest: { element: ElementHandle; selector: string; confidence: number } | null = null;
       for (const element of allElements) {
         try {
           const isVisible = await element.isVisible();
-          if (isVisible) {
-            const boundingBox = await element.boundingBox();
-            if (boundingBox && await this.isLikelyCookieDialog(element, boundingBox)) {
-              // Check if it contains cookie-related text
-              const textContent = await element.textContent();
-              if (textContent && this.containsCookieKeywords(textContent)) {
-                logger.debug(`Found cookie dialog element via fallback method`);
-                return { element, selector: 'fallback-dialog' };
-              }
+          if (!isVisible) continue;
+          const boundingBox = await element.boundingBox();
+          if (!boundingBox) continue;
+          const confidence = await this.scoreCookieDialogCandidate(element, 'fallback', boundingBox);
+          if (!fallbackBest || confidence > fallbackBest.confidence) {
+            const textContent = await element.textContent();
+            if (textContent && this.containsCookieKeywords(textContent)) {
+              fallbackBest = { element, selector: 'fallback-dialog', confidence };
             }
           }
-        } catch (error) {
-          // Continue with next element
-        }
+        } catch {}
+      }
+
+      if (fallbackBest) {
+        logger.debug(`Found cookie dialog element via fallback (confidence=${Math.round(fallbackBest.confidence)})`);
+        return { element: fallbackBest.element, selector: fallbackBest.selector };
       }
 
       return null;
     } catch (error) {
       logger.debug(`Error getting cookie dialog element:`, error);
       return null;
+    }
+  }
+
+  /**
+   * Compute a confidence score (0-100) that an element is a cookie dialog
+   */
+  private async scoreCookieDialogCandidate(element: ElementHandle, selector: string, boundingBox: any): Promise<number> {
+    try {
+      let score = 0;
+
+      // Selector-based hints
+      const sel = (selector || '').toLowerCase();
+      if (sel.includes('cookie') && sel.includes('banner')) score += 35;
+      if (sel.includes('cookie') && sel.includes('dialog')) score += 35;
+      if (sel.includes('cookie-banner-container')) score += 40;
+      if (sel.includes('consent')) score += 20;
+      if (sel.includes('disclaimer')) score += 10;
+
+      // Text-based keywords
+      const text = (await element.textContent()) || '';
+      if (text && this.containsCookieKeywords(text)) score += 30;
+
+      // Style/position hints (migrated from isLikelyCookieDialog)
+      const styleInfo = await element.evaluate((el: Element) => {
+        const style = window.getComputedStyle(el);
+        return {
+          position: style.position,
+          zIndex: parseInt(style.zIndex) || 0,
+          display: style.display,
+          visibility: style.visibility,
+          opacity: parseFloat(style.opacity) || 1,
+        };
+      });
+
+      const isOverlay = styleInfo.position === 'fixed' || styleInfo.position === 'absolute';
+      const hasHighZ = styleInfo.zIndex > 100;
+      const isVisible = styleInfo.visibility !== 'hidden' && styleInfo.opacity > 0;
+      if (isOverlay) score += 10;
+      if (hasHighZ) score += 10;
+      if (isVisible) score += 5;
+
+      // Position on screen
+      const isAtBottom = boundingBox.y > 500;
+      const isAtTop = boundingBox.y < 100;
+      const isCentered = boundingBox.y > 100 && boundingBox.y < 500;
+      if (isAtBottom || isAtTop || isCentered) score += 10;
+
+      // Size/coverage
+      const viewportHeight = 1080;
+      if (boundingBox.height > viewportHeight * 0.1) score += 10;
+
+      return Math.min(100, score);
+    } catch {
+      return 0;
     }
   }
 
@@ -754,40 +827,7 @@ export class CookieConsentHandler {
   /**
    * Check if an element is likely a cookie dialog based on its properties
    */
-  private async isLikelyCookieDialog(element: ElementHandle, boundingBox: any): Promise<boolean> {
-    try {
-      // Check if element is positioned as an overlay (fixed or absolute)
-      const computedStyle = await element.evaluate((el: Element) => {
-        const style = window.getComputedStyle(el);
-        return {
-          position: style.position,
-          zIndex: parseInt(style.zIndex) || 0,
-          display: style.display,
-          visibility: style.visibility,
-          opacity: parseFloat(style.opacity) || 1,
-        };
-      });
 
-      // Check if it's positioned as an overlay
-      const isOverlay = computedStyle.position === 'fixed' || computedStyle.position === 'absolute';
-      const hasHighZIndex = computedStyle.zIndex > 100;
-      const isVisible = computedStyle.visibility !== 'hidden' && computedStyle.opacity > 0;
-
-      // Check if it's at the bottom, top, or center of the viewport (common for cookie banners)
-      const isAtBottom = boundingBox.y > 500; // Roughly bottom half of screen
-      const isAtTop = boundingBox.y < 100; // Roughly top of screen
-      const isCentered = boundingBox.y > 100 && boundingBox.y < 500; // Center of screen
-
-      // Check if it covers a significant portion of the viewport
-      const viewportHeight = 1080; // Default viewport height
-      const coversSignificantArea = boundingBox.height > viewportHeight * 0.1; // At least 10% of viewport
-
-      return isOverlay && isVisible && (hasHighZIndex || isAtBottom || isAtTop || isCentered) && coversSignificantArea;
-    } catch (error) {
-      logger.debug(`Error checking if element is cookie dialog:`, error);
-      return false;
-    }
-  }
 
   /**
    * Identify consent buttons using heuristics
@@ -1196,13 +1236,9 @@ Focus on buttons that handle cookie consent.
       logger.debug(`Clicking button: "${buttonToClick.text}" (${buttonToClick.selector})`);
 
       try {
-        // First, try to scroll the button into view
-        await page.evaluate((selector) => {
-          const element = document.querySelector(selector);
-          if (element) {
-            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
-        }, buttonToClick.selector);
+        // Preferred: use locator to scroll into view (works with :has-text selectors)
+        const locator = page.locator(buttonToClick.selector).first();
+        await locator.scrollIntoViewIfNeeded({ timeout: 5000 });
 
         // Wait for the element to be visible and stable
         await page.waitForSelector(buttonToClick.selector, {
@@ -1210,15 +1246,16 @@ Focus on buttons that handle cookie consent.
           timeout: 5000
         });
 
-        // Try to click with different strategies
-        const element = await page.$(buttonToClick.selector);
+      // Try to click with different strategies
+      // Use locator to support Playwright's extended selectors like :has-text()
+      const element = await page.$(buttonToClick.selector);
         if (element) {
           // Check if element is actually clickable
           const isVisible = await element.isVisible();
           const isEnabled = await element.isEnabled();
 
           if (isVisible && isEnabled) {
-            await element.click();
+            await locator.click({ timeout: 5000 });
           } else {
             // Try JavaScript click as fallback
             await page.evaluate((selector) => {
@@ -1230,7 +1267,7 @@ Focus on buttons that handle cookie consent.
           }
         } else {
           // Fallback to page.click
-          await page.click(buttonToClick.selector);
+          await locator.click({ timeout: 5000 });
         }
 
         // Wait a moment for the click to register
@@ -1239,13 +1276,8 @@ Focus on buttons that handle cookie consent.
       } catch (clickError) {
         logger.debug(`Standard click failed, trying JavaScript click:`, clickError);
 
-        // Fallback: JavaScript click
-        await page.evaluate((selector) => {
-          const element = document.querySelector(selector) as HTMLElement;
-          if (element && element.click) {
-            element.click();
-          }
-        }, buttonToClick.selector);
+        // Fallback: try locator click again to handle Playwright text selectors
+        await page.locator(buttonToClick.selector).first().click({ timeout: 5000 });
 
         await page.waitForTimeout(1000);
       }
@@ -1871,14 +1903,15 @@ Important:
         // Wait for visibility
         await page.waitForTimeout(500);
 
-        // Try to click
-        const element = await page.$(selector);
+      // Try to click
+      const locator = page.locator(selector).first();
+      const element = await page.$(selector);
         if (element) {
           const isVisible = await element.isVisible();
           const isEnabled = await element.isEnabled();
 
           if (isVisible && isEnabled) {
-            await element.click();
+            await locator.click({ timeout: 5000 });
           } else {
             // JavaScript click fallback
             await page.evaluate((sel) => {
