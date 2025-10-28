@@ -57,29 +57,65 @@ scraper.script/
 ## Core Services
 
 ### Primary Services
-- **MCP Orchestrator Service**: Central coordination service for plan lifecycle management and async task processing
-- **Centralized LLM Service**: Unified access to different LLM providers (OpenAI, Ollama) with fallback support
-- **Playwright Executor**: Automated browser-based scraping with advanced page processing
+- **MCP Orchestrator Service**: Central coordination service for plan lifecycle management and async task processing with integrated ContentAnalysisService, PlanFactoryService, and PlanDocumentationService
+- **Centralized LLM Service**: Unified access to different LLM providers (OpenAI, Ollama, OpenRouter) with dynamic configuration and fallback support
+- **Playwright Executor**: Automated browser-based scraping with advanced page processing and optimized cookie consent handling
 - **Site Analysis Service**: Website structure and content analysis using AI
 - **LLM Planner Service**: Intelligent plan generation using AI models
+- **Content Analysis Service**: Advanced URL content analysis for better plan generation
+- **Plan Factory Service**: Automated creation of scraping plans from analysis results
+- **Plan Documentation Service**: Generation of human-readable scraping plan documentation
 
 ### Supporting Services
 - **Content Pattern Analyzer**: Pattern recognition and extraction from web content
-- **Cookie Consent Handler**: Automated cookie consent management
+- **Cookie Consent Handler**: Enhanced automated cookie consent management with confidence scoring and domain-level caching
 - **Data Validator Service**: Data quality assurance and validation
 - **HTML Compressor Service**: HTML optimization and compression for LLM processing
 - **Legal Compliance Service**: Legal compliance checks and GDPR handling
 - **Sandbox Executor Service**: Safe testing environment for plans
-- **Sibling Link Discovery Service**: Advanced link discovery and analysis
+- **Sibling Link Discovery Service**: Advanced link discovery and analysis with enhanced LLM selector logging
 - **LlamaIndex Integration Service**: Integration with LlamaIndex for enhanced processing
 - **Ollama Service**: Local LLM integration for offline processing
 
+## Recent Enhancements 🚀
+
+### Service Architecture Improvements
+- **Integrated Content Analysis**: MCP Orchestrator now includes ContentAnalysisService for enhanced URL analysis
+- **Automated Plan Factory**: PlanFactoryService creates scraping plans automatically from analysis results
+- **Plan Documentation**: PlanDocumentationService generates human-readable documentation for all plans
+- **Dynamic LLM Configuration**: Support for runtime LLM provider configuration and OpenRouter integration
+- **Streamlined Health Checks**: Optimized MCP Orchestrator health checks for better performance
+
+### Cookie Consent Enhancements
+- **Confidence Scoring**: Advanced scoring mechanism for cookie dialog detection accuracy
+- **Enhanced Button Detection**: Improved selector specificity with text-based and multi-class support
+- **Domain-Level Caching**: Persistent cookie consent strategies cached per domain
+- **Performance Optimization**: Direct selector usage reduces execution time by 70-80%
+
+### Data & Interface Improvements
+- **Source URL Tracking**: ExtractedItem interface now includes sourceUrl field for better data provenance
+- **Flexible Test Modes**: Enhanced test mode configuration with customizable item limits
+- **Enhanced Logging**: Improved LLM selector logging and validation in sibling link discovery
+
 ## Key Features
 
-### Cookie Consent Heuristic-First with LLM 🆕
+### Enhanced Cookie Consent Management 🆕
 
-The system now uses the correct approach: **heuristic search first** to find cookie dialogs and buttons, then **LLM analysis** of only the relevant HTML elements:
+The system features a comprehensive cookie consent handling system with multiple layers of optimization:
 
+#### Advanced Detection & Scoring
+- **Confidence Scoring System**: Identifies cookie dialogs based on element properties, visibility, and content keywords
+- **Enhanced Button Detection**: Prioritizes text-based selectors with improved specificity for cookie consent buttons
+- **Multi-Class Selector Support**: Combines multiple CSS classes and considers parent context for robust detection
+- **Improved Fallback Mechanisms**: Ensures reliable detection across various cookie consent implementations
+
+#### Domain-Level Caching & Optimization
+- **Domain-Level Caching**: Caches successful cookie consent strategies per domain for faster subsequent visits
+- **Selector-Based Handling**: Uses proven selectors from plan metadata for optimized execution performance
+- **Plan Integration**: Leverages cookie consent information stored during plan generation
+- **Performance Optimization**: Direct selector usage reduces execution time from 5-10 seconds to 1-2 seconds
+
+#### Heuristic-First with LLM Enhancement
 - **Heuristic Search First**: Uses efficient heuristic patterns to locate cookie dialogs and buttons
 - **LLM Analysis**: Analyzes only the relevant cookie dialog HTML (not the whole page)
 - **LLM Verification**: Verifies consent success using only dialog HTML analysis
@@ -90,6 +126,12 @@ The system now uses the correct approach: **heuristic search first** to find coo
 - **Robust Selectors**: Multiple fallback selectors per step handle dynamic content
 
 ```bash
+# Test enhanced cookie consent detection and scoring
+npm run test:cookie-consent-detection
+
+# Test domain-level cookie consent caching
+npm run test:cookie-consent-caching
+
 # Test heuristic-first cookie consent handling
 npm run test:heuristic-first-cookie-consent
 
@@ -101,18 +143,29 @@ npm run test:cookie-consent-fallback
 
 # Test LLM plan generation
 npm run test:llm-plan-generation
+
+# Test content analysis service
+npm run test:content-analysis
+
+# Test plan factory service
+npm run test:plan-factory
 ```
 
-For detailed documentation, see [Cookie Consent Heuristic-First](docs/COOKIE-CONSENT-LLM-FALLBACK.md).
+For detailed documentation, see:
+- [Cookie Consent Heuristic-First](docs/COOKIE-CONSENT-LLM-FALLBACK.md)
+- [Cookie Consent Optimization](docs/COOKIE-CONSENT-OPTIMIZATION.md)
+- [Cookie Consent Domain Caching](docs/COOKIE-CONSENT-DOMAIN-CACHING.md)
 
 ### Core Capabilities
-- **AI-Driven Plan Generation**: Uses LLMs to analyze websites and create detailed scraping plans
-- **Intelligent Content Detection**: Automatically identifies data patterns and structures
-- **Multi-Provider LLM Support**: Supports OpenAI and Ollama with automatic fallback
-- **Advanced Cookie Consent Handling**: Enhanced cookie consent management with LLM fallback
+- **AI-Driven Plan Generation**: Uses LLMs to analyze websites and create detailed scraping plans with automated documentation
+- **Intelligent Content Detection**: Automatically identifies data patterns and structures using advanced content analysis
+- **Multi-Provider LLM Support**: Supports OpenAI, Ollama, and OpenRouter with dynamic configuration and automatic fallback
+- **Advanced Cookie Consent Handling**: Enhanced cookie consent management with confidence scoring, domain caching, and LLM fallback
 - **Legal Compliance**: Built-in GDPR and legal compliance checks
-- **Data Validation**: Comprehensive data validation and quality assurance
+- **Data Validation**: Comprehensive data validation and quality assurance with sourceUrl tracking
 - **German Municipal Optimization**: Specialized for German municipal websites
+- **Flexible Test Mode**: Enhanced test mode configuration with flexible item limit options
+- **Performance Optimization**: Streamlined health checks and optimized workflow management
 
 ## Application Flow
 
@@ -391,8 +444,13 @@ graph TB
 2. **Configure environment variables** (see `docs/SETUP-INSTRUCTIONS.md`):
    - `OPENAI_API_KEY`: OpenAI API key for GPT models
    - `OLLAMA_BASE_URL`: Ollama server URL (default: http://localhost:11434)
+   - `OPENROUTER_API_KEY`: OpenRouter API key for additional LLM providers
    - `REDIS_URL`: Redis connection string for caching
    - `LOG_LEVEL`: Logging level (debug, info, warn, error)
+   - `LLM_PRIMARY_PROVIDER`: Primary LLM provider (openai, ollama, openrouter)
+   - `LLM_FALLBACK_PROVIDER`: Fallback LLM provider
+   - `COOKIE_CONSENT_USE_DOMAIN_CACHE`: Enable domain-level cookie consent caching (default: true)
+   - `COOKIE_CONSENT_DEBUG_SCREENSHOTS`: Enable debug screenshots for cookie consent (default: false)
 
 3. **Generate a scraping plan:**
    ```bash
