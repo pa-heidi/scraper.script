@@ -436,9 +436,97 @@ graph TB
 
 ## Getting Started
 
-1. **Install dependencies:**
+### Run via Docker Compose (recommended)
+
+You do **not** need to install Node, Playwright, or Redis locally. All required infrastructure (browser + Redis) runs in containers.
+
+1. **Set environment variables** (create a `.env` file in the project root or export them in your shell):
+
+   ```bash
+   # Required for cloud LLMs
+   export OPENAI_API_KEY=sk-...
+
+   # Optional / advanced
+   export OPENROUTER_API_KEY=...
+   export OLLAMA_BASE_URL=http://host.docker.internal:11434
+   export LLM_PRIMARY_PROVIDER=openai   # or ollama / openrouter
+   export LLM_FALLBACK_PROVIDER=        # optional
+   export LOG_LEVEL=info
+   ```
+
+   Redis is provided by `docker-compose.yml` and is pre-wired via:
+
+   - `REDIS_URL=redis://redis:6379/0`
+
+2. **Start the stack (app + Redis) with Docker Compose:**
+
+   ```bash
+   docker compose up --build
+   ```
+
+   This will:
+   - Build the app image from the `Dockerfile` (Playwright image with all browser deps)
+   - Start a Redis container for orchestration and caching
+   - Launch the interactive plan generator CLI inside the app container
+
+3. **Generate a scraping plan inside the running container:**
+
+   When `docker compose up` starts, you will see the interactive CLI prompts in your terminal (because the app container runs `node dist/scripts/generate-plan.js` by default). Follow the prompts to:
+   - Enter the main website URL
+   - Optionally provide content URLs
+   - Configure options (pagination, confidence thresholds, etc.)
+
+   Generated plans and logs are written to mounted directories on your host:
+   - `./plans` ↔ `/usr/src/app/plans`
+   - `./execution-results` ↔ `/usr/src/app/execution-results`
+   - `./logs` ↔ `/usr/src/app/logs`
+
+4. **(Optional) Execute an existing plan via Docker Compose:**
+
+   You can override the default command to run the executor instead of the interactive CLI:
+
+   ```bash
+   docker compose run --rm app \
+     node dist/scripts/execute-plan.js --plan-id <plan-id> --max-pages 5 --max-items 10
+   ```
+
+   Plan IDs are available in the generated markdown files under `plans/`.
+
+### Hybrid: Redis in Docker, app locally
+
+If you want to avoid installing Redis locally but still run the CLI and services on your host:
+
+1. **Start only Redis via Docker Compose:**
+
+   ```bash
+   # From the project root
+   docker compose up -d redis
+   ```
+
+2. **Point the app at the Docker Redis instance:**
+
+   ```bash
+   export REDIS_URL=redis://localhost:6379/0
+   ```
+
+3. **Run the app locally (with Playwright installed locally as described below):**
+
+   ```bash
+   npm run generate-plan
+   # or
+   npm run execute-plan -- --plan-id <plan-id> --max-pages 5 --max-items 10
+   ```
+
+In this hybrid setup, **Playwright must be installed locally** (browsers + system deps) because the scraping runs in your local Node process while Redis runs in Docker.
+
+### Manual (non-Docker) setup (optional)
+
+If you prefer to run everything directly on your machine:
+
+1. **Install dependencies and Playwright browsers:**
    ```bash
    npm install
+   npx playwright install --with-deps
    ```
 
 2. **Configure environment variables** (see `docs/SETUP-INSTRUCTIONS.md`):

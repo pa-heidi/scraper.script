@@ -1,0 +1,51 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: ai-scraper-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-scraper-service
+    depends_on:
+      - redis
+    environment:
+      # Core runtime
+      NODE_ENV: production
+      LOG_LEVEL: info
+
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+
+      # LLM providers (override in a .env file or with export)
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      LLM_PRIMARY_PROVIDER: ${LLM_PRIMARY_PROVIDER:-openai}
+      LLM_FALLBACK_PROVIDER: ${LLM_FALLBACK_PROVIDER:-}
+
+      # Cookie consent / debugging
+      COOKIE_CONSENT_USE_DOMAIN_CACHE: ${COOKIE_CONSENT_USE_DOMAIN_CACHE:-true}
+      COOKIE_CONSENT_DEBUG_SCREENSHOTS: ${COOKIE_CONSENT_DEBUG_SCREENSHOTS:-false}
+
+    # Allocate enough shared memory for Playwright/Chromium
+    shm_size: "1gb"
+
+    volumes:
+      - ./plans:/usr/src/app/plans
+      - ./execution-results:/usr/src/app/execution-results
+      - ./logs:/usr/src/app/logs
+
+    # Default interactive CLI to generate plans
+    command: ["node", "dist/scripts/generate-plan.js"]
+
+volumes:
+  redis-data:
