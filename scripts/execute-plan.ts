@@ -17,8 +17,11 @@ program
     .requiredOption('--plan-id <planId>', 'Plan ID to execute')
     .option('--max-pages <number>', 'Maximum pages to process', '1')
     .option('--max-items <number>', 'Maximum items to extract', '5')
+    .option('--max-items-per-page <number>', 'Maximum items per page')
     .option('--timeout <number>', 'Timeout in milliseconds', '30000')
     .option('--test-mode', 'Enable test mode', false)
+    .option('--validate', 'Validate results', true)
+    .option('--retry-failed', 'Retry failed items', true)
     .parse();
 
 const options = program.opts();
@@ -44,9 +47,11 @@ async function executePlan() {
         const executionOptions = {
             maxPages: parseInt(options.maxPages),
             maxItems: parseInt(options.maxItems),
+            maxItemsPerPage: options.maxItemsPerPage ? parseInt(options.maxItemsPerPage) : undefined,
             timeout: parseInt(options.timeout),
             testMode: options.testMode,
-            validateResults: true
+            validateResults: options.validate !== false,
+            retryFailedItems: options.retryFailed !== false
         };
 
         logger.info(`Executing plan ${options.planId} with run ID: ${runId}`);
