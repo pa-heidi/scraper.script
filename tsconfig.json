@@ -49,11 +49,13 @@
   "include": [
     "src/**/*",
     "*.ts",
-    "scripts/**/*.ts"
+    "scripts/**/*.ts",
+    "server/**/*.ts"
   ],
   "exclude": [
     "node_modules",
     "dist",
+    "web",
     "**/*.test.ts",
     "**/*.spec.ts"
   ]

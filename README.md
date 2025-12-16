@@ -167,6 +167,47 @@ For detailed documentation, see:
 - **Flexible Test Mode**: Enhanced test mode configuration with flexible item limit options
 - **Performance Optimization**: Streamlined health checks and optimized workflow management
 
+## Web UI
+
+The scraper includes a modern React web interface for managing scraping tasks.
+
+### Features
+- **Dashboard**: Overview of plans, results, and active tasks
+- **Plans Browser**: View and search generated scraping plans with markdown rendering
+- **Results Viewer**: Browse execution results with data tables
+- **Task Management**: Start new scraping tasks and monitor progress in real-time via SSE
+- **Visual Markdown**: Rich rendering of plan documentation
+
+### Quick Start
+
+```bash
+# Install all dependencies (including web UI)
+npm install
+
+# Start development servers (API + React)
+npm run dev
+```
+
+The web UI will be available at `http://localhost:5173` and the API at `http://localhost:3001`.
+
+### Architecture
+
+```
+web/                    # React + Vite + Tailwind frontend
+├── src/
+│   ├── pages/         # Dashboard, Plans, Results, Tasks pages
+│   ├── components/    # Reusable UI components (MarkdownViewer)
+│   ├── hooks/         # Custom hooks (useSSE for real-time updates)
+│   └── services/      # API client
+
+server/                 # Express API backend
+├── routes/            # REST endpoints for plans, results, tasks
+├── services/          # Task manager with file-based tracking
+└── index.ts           # Server entry point
+
+tasks/                  # File-based task tracking (JSON files)
+```
+
 ## Application Flow
 
 The AI Scraper Service follows a comprehensive workflow from plan generation to execution:
@@ -565,6 +606,13 @@ If you prefer to run everything directly on your machine:
 - `npm run test` - Run test suite
 - `npm run lint` - Check code quality
 - `npm run clean` - Clean build artifacts
+
+### Web UI
+- `npm run dev` - Start both API server and React dev server (recommended for development)
+- `npm run dev:server` - Start only the Express API server (port 3001)
+- `npm run dev:web` - Start only the React dev server (port 5173)
+- `npm run build:web` - Build the React frontend for production
+- `npm run build:all` - Build both TypeScript and React frontend
 
 ### Shell Scripts
 - `scripts/generate-plan.sh` - Unix/Linux plan generation wrapper

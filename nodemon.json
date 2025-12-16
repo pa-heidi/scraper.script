@@ -1,0 +1,15 @@
+{
+  "watch": ["server/", "src/"],
+  "ext": "ts,json",
+  "ignore": [
+    "tasks/",
+    "plans/",
+    "execution-results/",
+    "logs/",
+    "dist/",
+    "node_modules/",
+    "web/",
+    "*.json"
+  ],
+  "exec": "ts-node server/index.ts"
+}

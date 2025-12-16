@@ -123,3 +123,6 @@ plans/
 
 # Execution results
 execution-results/
+
+# Task files
+tasks/
