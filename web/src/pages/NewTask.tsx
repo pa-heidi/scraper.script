@@ -193,7 +193,7 @@ export default function NewTask() {
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://example.com/events"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                   required
                 />
                 <p className="text-xs text-gray-500 mt-1">
@@ -215,7 +215,7 @@ export default function NewTask() {
                     value={newContentUrl}
                     onChange={(e) => setNewContentUrl(e.target.value)}
                     placeholder="https://example.com/events/123"
-                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
@@ -266,7 +266,7 @@ export default function NewTask() {
                   <select
                     value={priority}
                     onChange={(e) => setPriority(e.target.value as typeof priority)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   >
                     <option value="balanced">Balanced (Default)</option>
                     <option value="cost">Cost (Cheapest)</option>
@@ -316,7 +316,7 @@ export default function NewTask() {
                       setMaxTokens(e.target.value ? parseInt(e.target.value) : undefined)
                     }
                     placeholder="Auto"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   />
                   <p className="text-xs text-gray-500 mt-1">Maximum tokens for LLM response</p>
                 </div>
@@ -335,7 +335,7 @@ export default function NewTask() {
                       setMaxCost(e.target.value ? parseFloat(e.target.value) : undefined)
                     }
                     placeholder="No limit"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   />
                   <p className="text-xs text-gray-500 mt-1">Maximum cost per request</p>
                 </div>
@@ -385,7 +385,7 @@ export default function NewTask() {
                     value={paginationUrl}
                     onChange={(e) => setPaginationUrl(e.target.value)}
                     placeholder="https://example.com/events?page=2"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                   />
                   <p className="text-xs text-gray-500 mt-1">
                     Helps the AI understand the pagination pattern
@@ -453,7 +453,7 @@ export default function NewTask() {
                   <select
                     value={planId}
                     onChange={(e) => setPlanId(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                     required
                   >
                     <option value="">Select a plan...</option>
@@ -483,7 +483,7 @@ export default function NewTask() {
                     max="1000"
                     value={maxPages}
                     onChange={(e) => setMaxPages(parseInt(e.target.value))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   />
                   <p className="text-xs text-gray-500 mt-1">
                     Maximum number of pages to process
@@ -500,7 +500,7 @@ export default function NewTask() {
                     max="10000"
                     value={maxItems}
                     onChange={(e) => setMaxItems(parseInt(e.target.value))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   />
                   <p className="text-xs text-gray-500 mt-1">Maximum items to extract in total</p>
                 </div>
@@ -520,7 +520,7 @@ export default function NewTask() {
                       setMaxItemsPerPage(e.target.value ? parseInt(e.target.value) : undefined)
                     }
                     placeholder="All items"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   />
                   <p className="text-xs text-gray-500 mt-1">Limit items extracted per page</p>
                 </div>
@@ -536,7 +536,7 @@ export default function NewTask() {
                     step="1000"
                     value={timeout}
                     onChange={(e) => setTimeout(parseInt(e.target.value))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   />
                   <p className="text-xs text-gray-500 mt-1">
                     Page load timeout ({(timeout / 1000).toFixed(0)}s)
